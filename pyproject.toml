@@ -62,6 +62,9 @@ known-first-party = ["lcv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The §11 acceptance gates live in tests/phase0.py .. phase4.py (addendum §12
+# naming); collect them alongside the conventional test_*.py files.
+python_files = ["test_*.py", "phase*.py"]
 addopts = "-ra"
 markers = [
   "gpu: requires a GPU + model weights; skipped in CI, run on the rented H100",

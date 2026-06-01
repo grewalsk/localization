@@ -35,3 +35,40 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip_gpu)
         if "needs_model" in item.keywords and not have_model:
             item.add_marker(skip_model)
+
+
+# --------------------------------------------------------------------------- #
+# Shared fixtures for the §11 phase gates
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session")
+def backbone():
+    """Primary TransformerLens backbone for the GPU gates (§3.1, §11).
+
+    Only requested by ``gpu``-marked tests, which the collection hook skips when
+    CUDA is absent, so the heavy load never runs in CI / on CPU dev.
+    """
+    pytest.importorskip("transformer_lens")
+    from lcv.model.backbone import load_backbone
+
+    return load_backbone()
+
+
+@pytest.fixture(scope="session")
+def gemma_backbone():
+    """Replication backbone (gemma-2-9b-it) for the Phase-4 gates (§3.1, §11.4)."""
+    pytest.importorskip("transformer_lens")
+    from lcv.model.backbone import REPLICATION_MODEL, load_backbone
+
+    return load_backbone(REPLICATION_MODEL)
+
+
+@pytest.fixture(scope="session")
+def chat_tokenizer():
+    """A real fast tokenizer for the 11.1e gold-span gate (marked ``needs_model``)."""
+    transformers = pytest.importorskip("transformers")
+    try:
+        return transformers.AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+    except Exception as exc:  # network / gating issues -> skip, not fail
+        pytest.skip(f"tokenizer unavailable: {exc}")
