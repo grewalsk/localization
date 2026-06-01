@@ -1,0 +1,66 @@
+[project]
+name = "localization-convergent-validity"
+version = "0.0.0"
+description = "Convergent validity of localization signals for LLM inference: per-instance agreement, a causal oracle, and the KV-compression flip-test."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "grewalsk" }]
+keywords = [
+  "mechanistic-interpretability",
+  "kv-compression",
+  "sparse-autoencoders",
+  "localization",
+  "transformerlens",
+]
+
+# Core deps are CPU-only and torch-free. The agreement metrics, oracle
+# statistics, flip-prediction model, and data plumbing must import and be
+# testable in CI without a GPU. Heavy instrumentation (torch, TransformerLens,
+# SAELens, KVPress) lives in the optional `gpu` extra and is only needed on the
+# rented H100 (addendum §1.1, §8.4).
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "scikit-learn>=1.4",
+  "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+data = ["datasets>=2.19"]
+gpu = [
+  "torch>=2.1",
+  "transformers>=4.44",       # Llama-3.1 support landed in 4.43; 4.44+ safer (§1.2)
+  "transformer-lens>=2.0",    # primary instrumentation (§2)
+  "sae-lens",                 # loads Llama Scope / Gemma Scope onto TL hooks (§4)
+  "nnsight",                  # parity-exact fallback only (§2)
+  # "kvpress",                # §9.1 — verify package name/version + target-model support before pinning
+  # "flash-attn",             # speed only; NEVER on attention-reading passes (§1.2)
+]
+dev = [
+  "pytest>=8",
+  "pytest-cov",
+  "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lcv"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "gpu: requires a GPU + model weights; skipped in CI, run on the rented H100",
+  "needs_model: requires downloading model/tokenizer weights (network + disk)",
+]
