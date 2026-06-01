@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.uv/
+*.egg-info/
+
+# Models / checkpoints / caches (re-downloadable; never commit)
+*.safetensors
+*.bin
+*.pt
+checkpoints/
+.cache/
+hf_cache/
+
+# Results / scratch
+outputs/
+results/
+figures/*.png
+*.log
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+.idea/
+.vscode/
