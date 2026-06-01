@@ -6,6 +6,11 @@ venv/
 .uv/
 *.egg-info/
 
+# uv lockfile — regenerated locally on `uv run`/`uv sync`. Committed only once
+# the full GPU env (incl. CUDA torch sources) is first known-good so the parity
+# gate 11.0 is reproducible (addendum §1.2). Remove this ignore at that point.
+uv.lock
+
 # Models / checkpoints / caches (re-downloadable; never commit)
 *.safetensors
 *.bin

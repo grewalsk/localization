@@ -1,0 +1,38 @@
+name: CI
+
+# CPU-only pipeline. The §11 GPU/model acceptance gates are marked `gpu` and are
+# deselected here; they run on the rented H100 (addendum §1.1, §8.4). This job
+# validates the non-rented foundation on every push/PR: lint, format, CPU tests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu:
+    name: lint + CPU tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (CPU dev extras only)
+        run: uv sync --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check src/ tests/
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/ tests/
+
+      - name: CPU tests (GPU gates deselected)
+        run: uv run pytest -m "not gpu" -ra
