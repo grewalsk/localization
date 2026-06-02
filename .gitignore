@@ -30,3 +30,4 @@ figures/*.png
 .ipynb_checkpoints/
 .idea/
 .vscode/
+.gstack/
