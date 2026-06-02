@@ -4,7 +4,7 @@
 A training-free, per-instance signal — cross-method disagreement `D(x)` — that flags which inputs an aggressive KV-compression method will break, grounded in a causal oracle so the result is more than "the tools are noisy."
 
 ## Current Focus
-CPU foundation complete. The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), NIAH data (§10), tokenization (§3.3/11.1e) — plus the §11 phase-gate suite (phase0–4) is implemented and green in CI (132 CPU tests pass). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. Remaining work is GPU-bound and waits on the rented H100.
+CPU foundation complete. The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), NIAH data (§10), tokenization (§3.3/11.1e), and the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10) over a shared gold-mapping core — plus the §11 phase-gate suite (phase0–4) is implemented and green in CI (151 CPU tests pass). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. Remaining work is GPU-bound and waits on the rented H100.
 
 ## Milestone
 **M0 — Convergent-Validity Result** (v0.1.0) · status: in_progress
@@ -31,6 +31,16 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
   the *original* Gemma Scope (SAE-only), not Gemma Scope 2; transcoder signals dropped
   in replication as a finding (§13.6). Corrected at the root in the binding spec/addendum
   as dated errata.
+- **Wrote the three natural-text loaders** (`lcv.data.{hotpotqa,longbench,triviaqa}`)
+  over a shared `assembly.assemble_text_instance` core: pure `dict -> Instance` build
+  functions (no `datasets` dep, fully CPU-testable) + lazily-guarded `load_*` HF wrappers.
+  19 new tests on synthetic columnar fixtures pin gate 11.1e on loader output (gold
+  located + decodes back ≥0.9, question excluded from the content mask, schema-drift
+  raises); real HF downloads gated behind `LCV_RUN_DATA_DOWNLOADS=1`. **Verified all
+  three HF schemas live via /browse first** — caught that all three dataset IDs were
+  renamed (`hotpot_qa`→`hotpotqa/hotpot_qa`, `THUDM/LongBench`→`zai-org/LongBench`,
+  `trivia_qa`→`mandarjoshi/trivia_qa`); fixed at the root as dated errata in addendum
+  §10/§12 + spec §5.7. LongBench needs `trust_remote_code=True` (script-based).
 
 ## Blockers / Watch-outs
 - **Provably-correct gate:** a phase is green only when it reproduces a published number, not when it runs. The failure mode is clean-but-wrong code.
@@ -40,6 +50,7 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
 - Attention-reading passes must use **eager attention** (FlashAttention returns no weights).
 - Leakage rule: `D(x)` is computed from the **full-cache pass only** — structurally isolated from the compressed run.
 - Compute is **rented per phase** (SF Compute H100); plumbing/tests run locally on CPU first.
+- **Dataset loaders are network-gated.** `load_{hotpotqa,longbench,triviaqa}` download via the `data` extra; the real-load tests only run under `LCV_RUN_DATA_DOWNLOADS=1`. `zai-org/LongBench` is script-based — it needs `trust_remote_code=True` (already passed by `load_longbench`). HF IDs are pinned as module constants (renamed from the originals; see addendum §10 errata) — do not revert to `hotpot_qa`/`THUDM/LongBench`/`trivia_qa`, they 404.
 
 ## Next Action
 Provision the SF Compute H100, install the `gpu` extra, and run the model-bound gates phase-by-phase (`pytest -m gpu`), starting with Phase 0 parity (11.0a/b/c/d). **Run 11.0b at the full 4k context length first** (not a short prompt) to settle the TL-vs-nnsight memory question before any signal fan-out; if TL OOMs at 4k, take the §13.1 nnsight checkpoint while the signal code is still portable. Before 11.1a, fill `PUBLISHED_WU_HEADS` in `tests/phase1.py` from the released Llama-3.1-8B `head_score` set.
