@@ -1,0 +1,60 @@
+@startuml pipeline
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName Helvetica
+skinparam ArrowColor #34495E
+skinparam activity {
+  BackgroundColor #EAF1FB
+  BorderColor #2E6DA4
+  FontColor #15263F
+  DiamondBackgroundColor #FDF2E0
+  DiamondBorderColor #D9892B
+}
+skinparam noteBackgroundColor #F4FAF4
+skinparam noteBorderColor #8BC28B
+
+title Localization Convergent Validity — Pipeline & §11 Acceptance Gates\n(a phase is green only when it reproduces a published number, not when it runs)
+
+start
+:**Phase 0 — Environment & Parity**\nTransformerLens load (+nnsight fallback),\nSAE loader, chat-template content mask;
+note right
+  **Gates 11.0a–d**
+  • TL <-> HF next-token KL < 1e-3
+  • SAE reconstruction in published range + L0 sparsity
+  • attention [b, 32, q, k], every row sums to 1
+end note
+if (parity gate 11.0b holds?) then (yes)
+else (no)
+  :switch to nnsight parity-exact fallback;
+endif
+
+:**Phase 1 — Signals & Within-Substrate Agreement**\naccum-attention, ported Wu heads, QRHead,\nITI, Orgad -> D(x) = 1 - mean pairwise Spearman;
+note right
+  **Gates 11.1a–e**
+  • Wu reproduces published Llama-3.1-8B heads
+  • top-N Wu ablation collapses NIAH (random ~ harmless)
+  • gold-span decode fuzzy-matches >= 0.9, mask clean
+end note
+
+:**Phase 2 — Causal Oracle**\ntrue token ablation E(t),\nattribution-patching estimate E_hat;
+note right
+  **Gates 11.2a–d**
+  • Spearman(E_hat, E) >= 0.8 (else subsampled ablation)
+  • corruption-stability reported (token vs document swap)
+  • gold-span ablation -> large answer-logit drop
+end note
+
+:**Phase 3 — Compression Flip-Test (the payoff)**\nH2O / SnapKV budget sweep,\nflip ~ D(x) + confounds (5-fold CV, LRT);
+note right
+  **Gates 11.3a–c**
+  • eviction reproduces paper LongBench (within a few pts)
+  • base flip rate in the 5–40% band
+  • confound-only AUROC before D(x); leakage check passes
+end note
+
+:**Phase 4 — Replication**\nre-run 0–3 on gemma-2-9b-it + Gemma Scope 2;
+stop
+
+@enduml

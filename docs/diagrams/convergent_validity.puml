@@ -1,0 +1,27 @@
+@startuml convergent_validity
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName Helvetica
+skinparam noteBackgroundColor #FFFFFF
+skinparam noteBorderColor #FFFFFF
+
+title RQ1 — Per-instance agreement within the token-attribution substrate\n(ILLUSTRATIVE: mean pairwise Spearman rho; warmer = stronger agreement)
+
+note as M
+|=  |= AccAttn |= Wu |= QRHead |= Transcoder |= **Oracle E** |
+|= **AccAttn**    |<#66bd63> 1.00 |<#a6d96a> 0.62 |<#fee08b> 0.41 |<#fdae61> 0.28 |<#d9ef8b> 0.55 |
+|= **Wu**         |<#a6d96a> 0.62 |<#66bd63> 1.00 |<#fee08b> 0.48 |<#fdae61> 0.31 |<#fee08b> 0.44 |
+|= **QRHead**     |<#fee08b> 0.41 |<#fee08b> 0.48 |<#66bd63> 1.00 |<#fdae61> 0.27 |<#fee08b> 0.46 |
+|= **Transcoder** |<#fdae61> 0.28 |<#fdae61> 0.31 |<#fdae61> 0.27 |<#66bd63> 1.00 |<#fdae61> 0.33 |
+|= **Oracle E**   |<#d9ef8b> 0.55 |<#fee08b> 0.44 |<#fee08b> 0.46 |<#fdae61> 0.33 |<#66bd63> 1.00 |
+end note
+
+legend bottom
+Illustrative only — no data yet. Populated by Phase 1 (off-diagonal agreement) and Phase 2 (oracle column).
+Low off-diagonal rho ==> the deployed signals disagree about *where information lives* ==> high D(x).
+The design is "can't-null": strong agreement and strong disagreement are each a publishable RQ1 result.
+endlegend
+
+@enduml

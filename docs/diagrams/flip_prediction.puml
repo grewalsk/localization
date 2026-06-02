@@ -1,0 +1,48 @@
+@startuml flip_prediction
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName Helvetica
+skinparam ArrowColor #34495E
+skinparam rectangle {
+  FontColor #15263F
+  BorderColor #2E6DA4
+}
+skinparam noteBackgroundColor #FBF6E7
+skinparam noteBorderColor #D9B85B
+
+title RQ3 — Does pre-measured disagreement D(x) predict KV-compression flips?\n(leakage-safe pipeline; ILLUSTRATIVE 5-fold CV AUROC)
+
+rectangle "**Full-cache** forward pass" as FC #EAF1FB
+rectangle "Localization signals\n(within one substrate)" as SIG #EAF1FB
+rectangle "**D(x)** = 1 - mean pairwise Spearman" as DX #D6F5DE
+
+rectangle "**Compressed** pass\nH2O / SnapKV @ budget" as CC #FDEBD0
+rectangle "Correctness (F1>=0.5 / EM)\nflip = correct -> wrong" as FL #FDEBD0
+
+rectangle "Logistic: flip ~ D(x) + confounds\n(length, gold-depth, answer-entropy)\n5-fold CV · LRT · calibration" as MODEL #FCF3CF
+
+FC --> SIG
+SIG --> DX
+CC --> FL
+DX --> MODEL
+FL --> MODEL
+
+note bottom of CC
+  **Leakage rule (§9.3 / gate 11.3c).** D(x) is computed from the
+  full-cache pass **only**; the compressed run can never influence
+  the feature that predicts its own outcome. Enforced by the type
+  system (DisagreementScore refuses to exist otherwise).
+end note
+
+legend bottom
+==  5-fold CV AUROC — does D(x) beat the difficulty proxies?  (illustrative)  ==
+|= model |= AUROC |=  |
+|= confound-only (length, depth, entropy) | 0.61 | <color:#fdae61>**#############**</color><color:#D9D9D9>#######</color> |
+|= D(x) only                              | 0.68 | <color:#a6d96a>**###############**</color><color:#D9D9D9>#####</color> |
+|= **D(x) + confounds (full)**            | **0.74** | <color:#1a9850>**#################**</color><color:#D9D9D9>###</color> |
+incremental AUROC (D(x) over confounds) = **+0.13**   ·   likelihood-ratio test chi2(1), p < 0.01
+endlegend
+
+@enduml

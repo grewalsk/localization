@@ -22,6 +22,32 @@ It differs from MIB/BlackboxNLP in one breath: **per-instance, not aggregate; de
 
 ---
 
+## Pipeline & Expected Results
+
+> **Illustrative schematics** rendered with PlantUML (sources in [`docs/diagrams/`](docs/diagrams)). **No experiments have run yet** — these show the *shape* of each gate's output so a reviewer can see what Phase 0–4 will produce. **All numbers are placeholders, not findings.** Regenerate with `plantuml -tpng docs/diagrams/*.puml`.
+
+**Methodology — Phase 0 → 4 and the §11 acceptance gates.** A phase is green only when it reproduces a published number, not when it runs.
+
+![Pipeline and §11 acceptance gates](docs/diagrams/pipeline.png)
+
+**RQ1 — Do the deployed signals agree per-instance?** Within-substrate pairwise Spearman; low off-diagonal correlation means the tools disagree about *where information lives* → high `D(x)`.
+
+![Per-instance agreement matrix](docs/diagrams/convergent_validity.png)
+
+**RQ2 — Does each signal track the causal oracle `E(t)`?** A signal can look authoritative on its own task yet correlate only weakly with the true token-ablation effect — this is what decides the headline.
+
+![Method fidelity to the causal oracle](docs/diagrams/oracle_fidelity.png)
+
+**RQ3 — The payoff.** Does pre-measured disagreement `D(x)` predict KV-compression flips *beyond* trivial difficulty proxies? The pipeline is leakage-safe by construction: `D(x)` comes from the full-cache pass only.
+
+![Disagreement predicts compression flips](docs/diagrams/flip_prediction.png)
+
+**Substrate structure.** Agreement is computed *only within* a substrate; substrates are never merged (§6).
+
+![Substrate map](docs/diagrams/substrate_map.png)
+
+---
+
 ## Stack
 
 | Layer | Choice | Rationale |

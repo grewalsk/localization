@@ -1,0 +1,54 @@
+@startmindmap substrate_map
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName Helvetica
+
+<style>
+mindmapDiagram {
+  node {
+    BackgroundColor #EAF1FB
+    LineColor #2E6DA4
+    FontColor #15263F
+    RoundCorner 10
+  }
+  .root {
+    BackgroundColor #15263F
+    FontColor #FFFFFF
+  }
+  .branch {
+    BackgroundColor #2E6DA4
+    FontColor #FFFFFF
+  }
+  .rq4 {
+    BackgroundColor #FDEBD0
+    FontColor #15263F
+  }
+}
+</style>
+
+* Localization\nsignals <<root>>
+** Token-attribution\n(importance over content tokens) <<branch>>
+*** Accumulated attention
+*** Wu attention
+*** QRHead attention
+*** Transcoder attr\n(conditional, gate 11.2c)
+** Component\n(score over 32 query heads/layer) <<branch>>
+*** Wu heads
+*** QRHead heads
+*** ITI heads
+*** Transcoder loadings
+** Answer-position\n(RQ4 — reported separately) <<rq4>>
+*** ITI direction <<rq4>>
+*** Orgad answer tokens <<rq4>>
+
+header
+Substrates are NEVER merged (§6)
+endheader
+
+legend bottom
+Agreement is defined **only within** a substrate. Wu and QRHead appear in two substrates
+(attention summed onto tokens vs. their native head sets); Wu-vs-QRHead head-set Jaccard is a headline number.
+endlegend
+@endmindmap
