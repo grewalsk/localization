@@ -324,9 +324,11 @@ Report sensitivity of the Phase 3 conclusion to the F1 threshold (0.3, 0.5, exac
 | Purpose | HF identifier / source | Config | Gold-span source | Phase-1 n | Oracle n | Flip n |
 |---|---|---|---|---|---|---|
 | Controllable NIAH | `gkamradt/LLMTest_NeedleInAHaystack` methodology (Paul Graham haystack + synthetic "magic number" needles); or RULER | n/a | exact by construction (you insert it) | 200-500 | 100-200 | >=300 correct |
-| Multi-hop QA | `hotpot_qa` | `distractor` | `supporting_facts` (sentence-level) | 200-500 | 100-200 | >=300 correct |
-| Long-context QA | `THUDM/LongBench` | `hotpotqa`, `2wikimqa`, `musique` | per-subset gold context | 200-500 | subset | subset |
-| Easy single-hop contrast | `trivia_qa` | `rc` | answer string | 200 | 50-100 | n/a |
+| Multi-hop QA | `hotpotqa/hotpot_qa` | `distractor` | `supporting_facts` (sentence-level) | 200-500 | 100-200 | >=300 correct |
+| Long-context QA | `zai-org/LongBench` | `hotpotqa`, `2wikimqa`, `musique` | per-subset gold context (answer strings) | 200-500 | subset | subset |
+| Easy single-hop contrast | `mandarjoshi/trivia_qa` | `rc` | answer string + aliases | 200 | 50-100 | n/a |
+
+**[Errata 2026-06-02]** The three HF identifiers above were corrected after verifying schemas against the live datasets-server. All three originals were renamed and now 404 with `{"error":"The dataset has been renamed."}`: `hotpot_qa` -> `hotpotqa/hotpot_qa`, `THUDM/LongBench` -> `zai-org/LongBench`, `trivia_qa` -> `mandarjoshi/trivia_qa`. `zai-org/LongBench` is script-based (`LongBench.py` + `data.zip`), so loading it requires `trust_remote_code=True`; it has no datasets-server introspection. Verified columnar shapes: HotpotQA `supporting_facts`/`context` are dicts of parallel lists; TriviaQA `entity_pages`/`search_results` are columnar (`entity_pages.wiki_context` is a `list[str]`) while `answer` is a plain dict; LongBench QA rows are flat (`input`, `context`, `answers: list[str]`). These IDs are pinned as module constants in `lcv.data.{hotpotqa,longbench,triviaqa}`.
 
 **Gold-span token mapping (named bug surface).** Mapping HotpotQA `supporting_facts` (given as `[title, sentence_id]`) to token indices requires: locating the sentence text in the rendered context, then mapping characters to tokens through the tokenizer's offset mapping, then intersecting with the content-token mask. Acceptance test 11.1e: decode the mapped token indices and fuzzy-match the result to the gold sentence text at >= 0.9 similarity. For synthetic NIAH this is trivial and exact (you control insertion), which is why NIAH is the cleanest substrate to bring up first.
 
@@ -402,6 +404,8 @@ repo/
     flip_model.py      logistic regression + confounds + CV + LRT (9.3)
   data/
     niah.py            synthetic needle generation (exact gold spans)
+    tokenization.py    content-token mask + char-span -> token mapping (3.3, 11.1e)
+    assembly.py        shared natural-text Instance assembly + gold mapping (11.1e)
     hotpotqa.py        loader + supporting-fact -> token mapping (11.1e)
     longbench.py       subset loaders + official metrics
     triviaqa.py        easy-contrast loader
