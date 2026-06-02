@@ -72,7 +72,7 @@ The phases mirror the engineering addendum's §11 acceptance-gate numbering (Pha
 - **Research flag:** science (cross-model evidence)
 - **Depends on:** Phase 3
 - **Goal:** re-run Phase 0–3 on a second model family.
-- **Scope (build):** `gemma-2-9b-it` backbone + Gemma Scope 2 hook points/transcoders; re-execute the §11.0–11.3 gates and the full sweep.
+- **Scope (build):** `gemma-2-9b-it` backbone + original Gemma Scope SAE hook points (SAE-only; **no Gemma-2 transcoders** — drop the transcoder-based signals and report as a finding, §13.6); re-execute the §11.0–11.3 gates and the full sweep over the attention-based signals.
 - **Exit criteria (§11.4):** disagreement structure + the `D(x)` result replicate (or don't — either is reportable).
 - **Outcome:** cross-family generalization claim.
 
@@ -84,7 +84,7 @@ The phases mirror the engineering addendum's §11 acceptance-gate numbering (Pha
 3. Drop transcoder token substrate if 11.2c fails — report as a finding (§13.6).
 4. Flip-test budget points tuned to the 5–40% band (§13.7).
 5. Probing datasets: ITI needs a labeled true/false set distinct from QA evals; QRHead needs real long-context QA examples.
-6. Gemma-2-9B architecture facts + Gemma Scope 2 hook points (Phase 4).
+6. Gemma-2-9B architecture facts + original-Gemma-Scope SAE hook points (Phase 4); transcoder signals dropped on Gemma 2 (no transcoder suite — §13.6).
 
 ---
 *ROADMAP.md — the phase plan. Updated by `/paul:plan` and at phase boundaries.*

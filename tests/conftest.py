@@ -57,7 +57,11 @@ def backbone():
 
 @pytest.fixture(scope="session")
 def gemma_backbone():
-    """Replication backbone (gemma-2-9b-it) for the Phase-4 gates (§3.1, §11.4)."""
+    """Replication backbone (gemma-2-9b-it) for the Phase-4 gates (§3.1, §11.4).
+
+    Gemma 2 carries only the original Gemma Scope (SAE-only); the transcoder-based
+    signals are dropped on this backbone and reported as a finding (§13.6).
+    """
     pytest.importorskip("transformer_lens")
     from lcv.model.backbone import REPLICATION_MODEL, load_backbone
 

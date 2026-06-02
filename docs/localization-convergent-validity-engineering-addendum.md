@@ -62,7 +62,7 @@ Three viable backbones exist and they are not interchangeable at 8B scale.
 | Role | Model | Reason |
 |---|---|---|
 | Primary | `meta-llama/Llama-3.1-8B-Instruct` | The KV-compression and retrieval-head lineages overwhelmingly use Llama; Llama Scope provides SAEs and transcoders on every sublayer of all 32 layers. |
-| Replication | `google/gemma-2-9b-it` | Gemma Scope 2 (2025) provides high-quality SAEs and transcoders; shows the disagreement structure is not Llama-specific. |
+| Replication | `google/gemma-2-9b-it` | **[Errata 2026-06-02]** The original Gemma Scope (Lieberum et al., 2024) provides high-quality SAEs for Gemma 2 but **no transcoders** — transcoders only exist for Gemma 3 (Gemma Scope 2, 2025). The transcoder-based signals are therefore dropped in replication and reported as a finding (§11.2c / §13.6); the attention-based signals show the disagreement structure is not Llama-specific. |
 | Third option | Qwen2.5-7B-Instruct | Qwen-Scope (2026) exists; reserve for the cross-model universality extension (Section 10 of the spec). |
 
 ### 3.2 Architecture facts that change the code (deterministic)
@@ -368,7 +368,7 @@ This is the operational heart of the addendum. The agent runs these before advan
 
 ### 11.4 Phase 4: replication
 
-- Re-run 11.0 through 11.3 on `gemma-2-9b-it` with Gemma Scope 2. The disagreement structure and the D(x)-predicts-flips result either replicate or they do not; either is reportable.
+- Re-run 11.0 through 11.3 on `gemma-2-9b-it` with the **original Gemma Scope** (SAE-only). **[Errata 2026-06-02]** Gemma 2 has no transcoder suite (transcoders are Gemma-3/Gemma Scope 2 only), so the transcoder-based signals are dropped in replication and reported as a finding (§11.2c / §13.6); the attention-based signals carry RQ1–RQ3. The disagreement structure and the D(x)-predicts-flips result either replicate or they do not; either is reportable.
 
 ---
 

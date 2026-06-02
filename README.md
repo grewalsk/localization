@@ -57,7 +57,7 @@ It differs from MIB/BlackboxNLP in one breath: **per-instance, not aggregate; de
 | SAE / transcoder | SAELens + Llama Scope (`fnlp`/`OpenMOSS-Team`) | Transcoders (`LXTC`) per sublayer, built for clean attribution |
 | KV compression | KVPress (NVIDIA) | Maintained H2O/SnapKV under HF generate; hand-rolled eviction is where silent bugs live |
 | Stats | scipy, scikit-learn, statsmodels | Agreement metrics + logistic flip model, LRT, CV |
-| Models | `meta-llama/Llama-3.1-8B-Instruct` (primary), `google/gemma-2-9b-it` (replication) | Retrieval-head/KV lineages use Llama; Gemma Scope 2 for non-Llama replication |
+| Models | `meta-llama/Llama-3.1-8B-Instruct` (primary), `google/gemma-2-9b-it` (replication) | Retrieval-head/KV lineages use Llama; Gemma 2 + the **original Gemma Scope** (SAE-only) for non-Llama replication — Gemma 2 has no transcoder suite (those are Gemma-3/Gemma Scope 2 only), so the transcoder signals are dropped there and reported as a finding (§13.6) |
 | Env | uv lockfile (pinned, hashed) | Reproducibility across ephemeral rented nodes |
 
 **Prime directive (§0):** treat every library name as a *starting point to verify against the current ecosystem* — the reproduce-a-published-number gates (§11) are what guarantee correctness. Do **not** pip-install `nightdessert/Retrieval_Head` (pins transformers 4.37.2, can't load Llama-3.1) — **port** the algorithm (§5.2).
@@ -154,7 +154,7 @@ Gates (§11.3): compression reproduces paper LongBench within a few pts · flip 
 Outcome: does D(x) add signal beyond difficulty proxies → training-free compression-fragility flag (RQ3).
 
 ### Phase 4 — Replication
-Re-run Phase 0–3 on `gemma-2-9b-it` + Gemma Scope 2. Replicates or not — either is reportable.
+Re-run Phase 0–3 on `gemma-2-9b-it` + the **original Gemma Scope** (SAE-only). Gemma 2 has no transcoders (those are Gemma-3/Gemma Scope 2 only), so the transcoder-based signals are dropped here and reported as a finding (§13.6); the attention-based signals carry RQ1–RQ3. Replicates or not — either is reportable.
 
 ---
 
@@ -171,7 +171,7 @@ Re-run Phase 0–3 on `gemma-2-9b-it` + Gemma Scope 2. Replicates or not — eit
 9. **Corruption = symmetric token-swap** (never Gaussian) — stable, semantically controlled.
 10. **Transcoder layers 8/16/21** (~25/50/65% depth).
 11. **Single 80GB H100 via SF Compute**; reproducibility via lockfile + download scripts.
-12. **Full Phase 0–4 scope** including Gemma replication.
+12. **Full Phase 0–4 scope** including Gemma replication (on `gemma-2-9b-it`; transcoder signals dropped there for lack of a Gemma-2 transcoder suite — §13.6).
 13. **Substrates never merged**; cross-family comparisons (attention vs transcoder vs oracle) are load-bearing; ITI/Orgad reported separately (RQ4).
 
 ---
@@ -183,7 +183,7 @@ Re-run Phase 0–3 on `gemma-2-9b-it` + Gemma Scope 2. Replicates or not — eit
 3. Drop transcoder token substrate if gate 11.2c fails — **report as a finding** (§13.6).
 4. Flip-test budget points tuned to the 5–40% band (§13.7).
 5. Probing datasets: ITI needs a labeled true/false set distinct from QA evals; QRHead needs a few real long-context QA examples.
-6. Gemma-2-9B architecture facts + Gemma Scope 2 hook points (Phase 4).
+6. Gemma-2-9B architecture facts + original-Gemma-Scope SAE hook points (Phase 4); transcoder signals are dropped on Gemma 2 (no transcoder suite — §13.6).
 
 ---
 

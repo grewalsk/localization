@@ -25,7 +25,7 @@ A training-free, per-instance signal — cross-method disagreement `D(x)` — th
 - **Agreement engine** — within-substrate Spearman/Jaccard/RBO + per-instance disagreement `D(x)` + permutation/FDR (substrates never merged).
 - **Causal oracle** — true token/span ablation `E(t)` + validated attribution-patching approximation.
 - **Compression flip-test** — H2O/SnapKV budget sweep + leakage-safe logistic model predicting flips from `D(x)` beyond difficulty confounds.
-- **Replication** — the whole pipeline on a second model family (Gemma-2-9B).
+- **Replication** — the whole pipeline on a second model family (`gemma-2-9b-it` + the original Gemma Scope, SAE-only). Gemma 2 has no transcoder suite, so the transcoder-based signals are dropped in replication and reported as a finding (§13.6, gate 11.2c); the attention-based signals carry RQ1–RQ3.
 
 ### Validated (Shipped)
 None yet.
@@ -92,7 +92,7 @@ None yet.
 | Layer | Technology | Notes |
 |-------|------------|-------|
 | Instrumentation | TransformerLens (primary), nnsight (fallback) | string hook points; parity-gated |
-| SAE / transcoder | SAELens + Llama Scope / Gemma Scope 2 | transcoders `LXTC`, 8x width |
+| SAE / transcoder | SAELens + Llama Scope (transcoders) / original Gemma Scope (SAE-only) | `LXTC` 8x transcoders on Llama; **no Gemma-2 transcoders** → transcoder signals dropped in replication (§13.6) |
 | KV compression | KVPress | H2O / SnapKV under HF generate |
 | Stats | scipy, scikit-learn, statsmodels | agreement + logistic flip model |
 | Models | Llama-3.1-8B-Instruct, gemma-2-9b-it | primary + replication |

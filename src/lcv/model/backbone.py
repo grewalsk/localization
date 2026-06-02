@@ -21,6 +21,12 @@ if TYPE_CHECKING:  # hints only; never imported at runtime on the CPU path
 
 # Models (§3.1).
 PRIMARY_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+# Replication backbone. Gemma 2 has only the *original* Gemma Scope (SAE-only); no
+# transcoder suite exists for it -- Gemma Scope 2 / transcoders are Gemma-3-only.
+# So the transcoder-based signals (transcoder_attr in the token-attribution
+# substrate, transcoder_loadings in the component substrate) are dropped from this
+# replication and the omission is reported as a finding (§13.6, gate 11.2c); RQ1-RQ3
+# replicate over the attention-based signals on Gemma 2.
 REPLICATION_MODEL = "google/gemma-2-9b-it"
 
 # Llama-3.1-8B architecture facts (§3.2). ``hook_pattern`` returns 32 *query*
