@@ -27,17 +27,23 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
   and §11 phase0–4 acceptance gates (CPU cores real, GPU/needs_model marked).
 - CI green: ruff (lint+format) + 132 CPU tests pass; 12 GPU + 3 needs_model gates
   collected and auto-skipped where CUDA/weights are absent.
+- **Fixed the Gemma replication pairing** (`cef7832`): `gemma-2-9b-it` is paired with
+  the *original* Gemma Scope (SAE-only), not Gemma Scope 2; transcoder signals dropped
+  in replication as a finding (§13.6). Corrected at the root in the binding spec/addendum
+  as dated errata.
 
 ## Blockers / Watch-outs
 - **Provably-correct gate:** a phase is green only when it reproduces a published number, not when it runs. The failure mode is clean-but-wrong code.
+- **TL-primary is a memory bet — run the 11.0b parity gate at FULL 4k context on the actual H100 BEFORE fanning out all six signal implementations against TL hooks.** TransformerLens is ergonomic but materializes a lot; at 4k context on an 8B model with attribution-patching gradients + caching it may OOM where the spec leaned toward nnsight-primary. The nnsight fallback + parity gate is the hedge. **Keep every signal backbone-portable** (read patterns/activations through a thin accessor, not TL-specific globals) so an OOM at 4k means swapping the backbone, not rewriting signals. If TL OOMs at 4k, learn it first (§13.1 checkpoint) while the signal code is still portable.
+- **Replication transcoders dropped on Gemma 2.** Gemma 2 has only the original Gemma Scope (SAE-only); no transcoder suite exists for it (transcoders are Gemma-3/Gemma Scope 2 only). On the `gemma-2-9b-it` rerun, do **not** attempt to load Gemma transcoders — the transcoder-based signals are omitted and reported as a finding (§13.6, gate 11.2c); RQ1–RQ3 replicate over the attention-based signals.
 - **Do NOT** `pip install nightdessert/Retrieval_Head` (pins transformers 4.37.2; can't load Llama-3.1) — port the Wu algorithm.
 - Attention-reading passes must use **eager attention** (FlashAttention returns no weights).
 - Leakage rule: `D(x)` is computed from the **full-cache pass only** — structurally isolated from the compressed run.
 - Compute is **rented per phase** (SF Compute H100); plumbing/tests run locally on CPU first.
 
 ## Next Action
-Provision the SF Compute H100, install the `gpu` extra, and run the model-bound gates phase-by-phase (`pytest -m gpu`), starting with Phase 0 parity (11.0a/b/c/d). Before 11.1a, fill `PUBLISHED_WU_HEADS` in `tests/phase1.py` from the released Llama-3.1-8B `head_score` set.
+Provision the SF Compute H100, install the `gpu` extra, and run the model-bound gates phase-by-phase (`pytest -m gpu`), starting with Phase 0 parity (11.0a/b/c/d). **Run 11.0b at the full 4k context length first** (not a short prompt) to settle the TL-vs-nnsight memory question before any signal fan-out; if TL OOMs at 4k, take the §13.1 nnsight checkpoint while the signal code is still portable. Before 11.1a, fill `PUBLISHED_WU_HEADS` in `tests/phase1.py` from the released Llama-3.1-8B `head_score` set.
 
 ---
 *STATE.md — the live cursor. Updated every loop step.*
-*Last updated: 2026-06-01*
+*Last updated: 2026-06-02*
