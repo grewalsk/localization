@@ -75,8 +75,8 @@ Component-substrate methods produce a per-instance (or global) score over heads 
 
 For RQ2 and to separate noise from plurality, we compute a per-instance causal effect for each token and head.
 
-- **Effect.** E(t) is the change in the answer log-probability when token *t*'s KV is ablated or patched at the relevant layers; the analogue for heads is the change under head ablation.
-- **Scaling.** Per-token patching across long contexts is linear in context length and infeasible at scale, so we use attribution patching (Syed et al., 2023) for the full sweep and verify it against true ablation on a 5 to 10 percent subsample, reporting the Pearson correlation between the linear estimate and the true effect.
+- **Effect.** E(t) is the drop in the answer log-probability when token *t*'s key/value is **masked** from attention at every layer (Definition 2; the primary oracle, **[Update 2026-06-05]** superseding the earlier "ablated or patched" framing — masking is read as an upper-bound proxy for eviction's per-token loss, not the identical operation). The analogue for heads is the change under head ablation. Symmetric token-swap is a robustness check on the ranking, not the primary oracle.
+- **Scaling.** Per-token masking across long contexts is linear in context length and infeasible at scale, so we use attribution patching (Syed et al., 2023) for the full sweep and verify it against true masking on a 5 to 10 percent subsample, reporting the **Spearman** rank correlation between the linear estimate and the true effect (ranking, not magnitude, is what every downstream use needs; gate 11.2a requires Spearman ≥ 0.8, else the pinned 150-instance exact-masking fallback).
 - **Method-versus-oracle fidelity.** Per instance, correlate each method's importance with E. High individual fidelity plus low mutual agreement is the strong plural-localization finding; the activation-patching best-practices result forces us to fix and report the patching configuration (corruption type, metric, granularity) and to show robustness to it, otherwise the oracle is as arbitrary as the methods it judges.
 
 ### 5.6 The deployment payoff

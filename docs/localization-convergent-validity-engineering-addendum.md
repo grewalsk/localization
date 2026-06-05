@@ -128,9 +128,16 @@ This is the single most error-prone component in the project and the one least s
 
 Take the top `M` features by `|score|`, with `M` in the range 16 to 64.
 
-**Step 2, attribute those features back to context tokens.** The feature activation at the answer position is a function of context tokens through attention in layers up to the transcoder's layer. For each top feature `f`, compute the gradient of `act_f` with respect to the residual stream at each context token position, contract over the residual dimension, and (optionally) multiply by the clean activation for a gradient-times-activation attribution, or by the corruption delta for an attribution-patching estimate. Weight each feature's per-token attribution by that feature's Step-1 answer-importance, and sum over the `M` features to get the per-instance token-importance vector for the transcoder substrate. Cost is `O(M)` backward passes per instance, acceptable for modest `M`.
+**Step 2, attribute those features back to context tokens — input-gradient reduction (primary; paper §2.1).** A feature may fire at one position while encoding information gathered from many context tokens, so the reduction is load-bearing: it defines what "the transcoder localizes token `t`" even means. The committed primary reduction is **input-gradient attribution**. For each top feature `f` with answer-attribution `g_f` (Step 1) and pre-activation `z_f`, distribute `|g_f|` over content tokens in proportion to how much each token's embedding `e_t` drives the feature, measured by the gradient norm of the pre-activation w.r.t. the embedding:
 
-**Mandatory validation gate (test 11.2c).** On instances the model answers correctly, the transcoder token ranking must (a) place gold-span tokens above random context tokens (AUROC versus gold-span membership above chance), and (b) correlate at least weakly with the ablation oracle of Section 8 (Spearman above a modest bar, e.g., 0.3).
+```
+w_{f,t} = || d z_f / d e_t ||_2
+a^{tc}_t = sum_f  |g_f| * w_{f,t} / sum_{t'} w_{f,t'}
+```
+
+then min-max normalize `a^{tc}` to `[0,1]^T` like the other token-attribution signals. The mechanics (row-normalize the `[F,T]` gradient-norm matrix, weight by `|g_f|`, sum over features, normalize) live in `signals/transcoder_attr.py` as a backbone-portable CPU core tested on synthetic `(g, W)` tensors; only `W` and `g` themselves need the GPU. **Robustness reduction:** re-run cross-family agreement under a simpler **firing-position** reduction (attribute each `|g_f|` to the position(s) where the feature fires) and report whether the agreement conclusion is stable; a conclusion that flips between reductions is an artifact of the reduction, a stable one licenses the cross-family comparison (H1).
+
+**Mandatory validation gate (test 11.2c).** On instances the model answers correctly, the transcoder token ranking (input-gradient reduction) must (a) place gold-span tokens above random context tokens (AUROC versus gold-span membership above chance), and (b) correlate at least weakly with the **masking** oracle of Section 8 (Spearman above a modest bar, e.g., 0.3).
 
 **Fallback if the gate fails.** Drop the transcoder from the **token-attribution** substrate and retain it only in the **component** substrate (via attention-to-feature read-direction loadings). Report the failure as a finding: "transcoder-based token attribution does not reliably localize on long-context QA in this setting." That is a legitimate, publishable negative about a method many people assume works, and it costs you nothing in the overall design because the token-attribution substrate still has the two attention-based members plus the gold-span oracle.
 
@@ -242,33 +249,37 @@ D(x) = 1 - mean over method pairs (i,j) of Spearman( imp_i(x), imp_j(x) )
 
 The oracle is what separates "the tools are noisy" (outcome 1) from "localization is genuinely plural" (outcome 2). Get this right or the central finding is unsupported.
 
-### 8.1 Ground-truth effect: token ablation aligned with the deployment operation
+### 8.1 Ground-truth effect: token masking (Definition 2), an analogue of the deployment operation
 
-Define the per-token causal effect as the change in the correct-answer log-probability when token `t` is removed from the KV cache:
+> **[Update 2026-06-05 — paper revision]** The primary oracle is **token masking** (Definition 2 of the paper, `docs/paper/2026-06-05-…tex`). Earlier drafts called the identical operation "token ablation"; the two terms denote the same thing — remove token `t`'s key/value entries so no query at any layer can attend to `t` — and the repo keeps `oracle/masking.py` as the canonical module (`oracle/ablation.py` is a thin legacy alias). The paper also **retreats from the "same operation as eviction" claim**: masking is now read as an *upper-bound proxy* (analogue) for the per-token information loss eviction induces, not the identical operation (see "analogue, not identical" below). Symmetric token-swap is demoted to a robustness check (§8.2, gate 11.2b).
+
+Define the per-token causal effect (Definition 2) as the drop in the full-cache answer log-probability when token `t`'s key/value is masked from attention at every layer in a single counterfactual forward pass:
 
 ```
-E(t) = logP(answer | full context) - logP(answer | context with token t masked from all attention)
+E(t) = logP(y(x) | x) - logP(y(x) | x^{\t})
 ```
 
-This is an **ablation**, and it is deliberately the *same operation* as the downstream failure mode, because KV eviction is exactly "remove tokens from the cache." That alignment is a feature: the oracle measures the thing the flip test stresses. The cost is `O(context length)` forward passes per instance (one per ablated token), which is why Section 8.3 approximates it.
+where `x^{\t}` is the forward pass in which token `t`'s K/V entries are removed at every layer (no query at any position attends to `t`) while all other cached representations are left in place, and `y(x)` is the full-cache answer. The cost is `O(content length)` forward passes per instance (one masked pass per content token), which is why Section 8.3 approximates it with attribution patching.
 
-The scientific spec used "ablate" and "patch" interchangeably; they are different and the distinction matters. Ablation removes a token; patching swaps a token's activation from a corrupted run. Use ablation for `E(t)` because of the deployment alignment above.
+**Analogue, not identical.** Masking a token's K/V is the closest single-token analogue of KV eviction available inside a clean causal-effect definition, but it is not what an eviction scheme does, and we do not claim it is. The oracle reads a single counterfactual forward pass, not the autoregressive trajectory an eviction scheme runs; eviction removes availability to *future* queries as decoding proceeds, whereas the oracle's masking is applied uniformly across the prompt pass. We therefore read `E(t)` as an upper-bound proxy for eviction's per-token information loss and test signals against it on that understanding. The empirical bridge to eviction is the flip test of Section 9, which uses the deployed schemes directly.
 
-### 8.2 Corruption choice for any patching-based estimate (checkpoint, with a default)
+The scientific spec used "ablate" and "patch" interchangeably; they are different and the distinction matters. Masking (ablation) removes a token's availability; patching swaps a token's activation from a corrupted run. Use masking for `E(t)`; patching enters only as the cheap estimator `E_hat` in §8.3, whose corruption reference is chosen in §8.2.
 
-Where patching is used (the attribution-patching approximation in 8.3 needs a corrupted reference for the activation delta), the corruption must be chosen deliberately. Zhang and Nanda (arXiv 2309.16042) show that Gaussian-noise corruption (the ROME style) is fragile and hyperparameter-sensitive. **Default: symmetric token replacement** (swap the gold span, or the needle, for a different plausible span so the answer is no longer supported), which is more stable and semantically controlled than noising embeddings. Document-swap (replace the supporting document with a distractor) is a coarser alternative for the multi-hop sets. Do not use Gaussian noise as the primary corruption. Report top-token-set stability across two corruption variants (test 11.2b) so a reviewer cannot claim the oracle is as arbitrary as the methods it judges.
+### 8.2 Corruption choice for the robustness check and the patching estimate (checkpoint, with a default)
 
-### 8.3 Cheap approximation: attribution patching, validated against ablation
+Token-swap plays two **secondary** roles now that masking is the primary oracle (§8.1): (i) the **oracle-ranking robustness check** — re-derive the ranking under symmetric token replacement and report stability against the masking ranking (gate 11.2b), so a reviewer cannot claim the oracle is arbitrary; and (ii) the **corrupted reference** the attribution-patching approximation (§8.3) needs to form the activation delta. In both roles the corruption must be chosen deliberately. Zhang and Nanda (arXiv 2309.16042) show Gaussian-noise corruption (the ROME style) is fragile and hyperparameter-sensitive. **Default: symmetric token replacement** (swap the gold span, or the needle, for a different plausible span so the answer is no longer supported), which is more stable and semantically controlled than noising embeddings, and stays on-manifold. Document-swap (replace the supporting document with a distractor) is a coarser alternative for the multi-hop sets. Do not use Gaussian noise. Note the swap variant changes neighboring positions' residual streams through their attention to the swapped token (it propagates from the embedding upward), which masking does not — one more reason masking, not swap, is the primary oracle.
 
-Attribution patching (Syed et al.) approximates a patching/ablation effect with one forward and one backward pass using a first-order expansion. For the mean-ablation variant aligned with 8.1:
+### 8.3 Cheap approximation: attribution patching, validated against masking
+
+Attribution patching (Syed et al.) approximates a patching/masking effect with one forward and one backward pass using a first-order expansion. For the mean-ablation variant aligned with 8.1:
 
 ```
 E_hat(t) ~= ( a_mean(t) - a_clean(t) )^T  *  grad_{a(t)} [ logP(answer) ]
 ```
 
-evaluated with the clean-run gradient, where `a(t)` is token `t`'s contribution (residual or KV) and `a_mean(t)` is the mean-ablation reference. This collapses the per-token forward-pass sweep into a single backward pass.
+evaluated with the clean-run gradient, where `a(t)` is token `t`'s contribution (residual or KV) and `a_mean(t)` is the mean-ablation reference. This collapses the per-token forward-pass sweep into a single backward pass, independent of the number of tokens.
 
-**Mandatory validation gate (test 11.2a):** on a 5 to 10 percent held-out subsample, compute true `E(t)` (the expensive ablation) and require **Spearman(`E_hat`, `E`) >= 0.8** on token ranking, with high sign-agreement. We require Spearman on ranking, not Pearson on magnitude, because every downstream use ranks tokens. If the bar is not met, fall back to subsampled true ablation (fewer instances, exact effect) rather than trusting the approximation.
+**Mandatory validation gate (test 11.2a):** on a 5 to 10 percent held-out subsample, compute true `E(t)` (the expensive **masking** oracle) and require **Spearman(`E_hat`, `E`) >= 0.8** on token ranking, with high sign-agreement. We require Spearman on ranking, not Pearson on magnitude, because every downstream use ranks tokens. This also addresses attribution patching's known failure mode of underestimating effects for distributed, high-magnitude activations (Kramár et al., AtP*). **If the bar is not met, take the pinned fallback branch** (`oracle/adjudication.py`): run true masking on a fixed `ADJUDICATION_SUBSET_SIZE = 150` adjudication subset rather than the full ~1K sweep, so a mid-run fidelity failure takes the cheap exact branch automatically instead of silently blowing the GPU budget on full-scale masking.
 
 ### 8.4 Cost mitigations (deterministic)
 
@@ -357,10 +368,10 @@ This is the operational heart of the addendum. The agent runs these before advan
 
 ### 11.2 Phase 2: the oracle
 
-- **11.2a** Attribution patching vs true ablation on the held-out subsample: Spearman >= 0.8 on token ranking with high sign-agreement. Fail -> fall back to subsampled true ablation.
-- **11.2b** Top-token-set stability across two corruption variants (token-swap vs document-swap): report the overlap. Not a hard gate; a reported robustness number that pre-empts the "arbitrary oracle" objection.
-- **11.2c** Transcoder token-attribution gate (Section 4.4): gold-span AUROC > chance and Spearman with oracle > ~0.3 on correctly-answered instances. Fail -> drop transcoder from the token substrate, keep in component substrate, report as a finding.
-- **11.2d** Sanity: ablating the entire gold span produces a large answer-logit drop on instances the model got right (the gold span is causally necessary). Fail -> the answer-metric wiring is wrong.
+- **11.2a** Attribution patching vs true **masking** (§8.1, Definition 2) on the held-out subsample: Spearman >= 0.8 on token ranking with high sign-agreement. Fail -> take the pinned fallback (`oracle/adjudication.py`): exact masking on the `ADJUDICATION_SUBSET_SIZE = 150` subset, not the full sweep.
+- **11.2b** Oracle-ranking stability under the robustness corruption: re-derive the top-token set under symmetric token-swap and report its overlap with the **masking** ranking (with document-swap as the coarse multi-hop variant). Not a hard gate; a reported robustness number that pre-empts the "arbitrary oracle" objection.
+- **11.2c** Transcoder token-attribution gate (Section 4.4): gold-span AUROC > chance and Spearman with the masking oracle > ~0.3 on correctly-answered instances, computed on the input-gradient feature->token reduction (§4.4). Fail -> drop transcoder from the token substrate, keep in component substrate, report as a finding.
+- **11.2d** Sanity: **masking** the entire gold span produces a large answer-logit drop on instances the model got right (the gold span is causally necessary). Fail -> the answer-metric wiring is wrong.
 
 ### 11.3 Phase 3: the payoff
 
@@ -395,9 +406,11 @@ repo/
   substrates.py        projections + normalization (Section 6)
   agreement.py         Spearman/Jaccard/RBO/D(x)/permutation (Section 7)
   oracle/
-    ablation.py        true token/span ablation E(t) (8.1)
+    masking.py         primary masking oracle E(t), Definition 2 (8.1)
+    ablation.py        legacy alias re-exporting masking.py (8.1)
+    adjudication.py    §11.2a fallback branch: ADJUDICATION_SUBSET_SIZE=150 (8.3)
     attr_patching.py   attribution-patching approximation + gate 11.2a (8.3)
-    corruption.py      token-swap / document-swap (8.2)
+    corruption.py      token-swap / document-swap robustness corruption (8.2)
   compression/
     flip_test.py       eviction via external lib + reproduce-paper gate 11.3a (9.1)
     correctness.py     EM/F1/normalization, pre-registered metric (9.2)
@@ -426,7 +439,7 @@ Surface each of these to the human; do not resolve autonomously.
 1. **Instrumentation backbone** if parity test 11.0b fails (TL vs nnsight fallback). Section 2.
 2. **Base-SAE-on-Instruct vs study-the-base-model.** Section 3.3. Default recommended: Instruct + base SAE + variance control.
 3. **Which layers** to instrument for the transcoder substrate. Section 4.3. Default: ~25/50/65% depth.
-4. **Corruption type** for patching. Section 8.2. Default: token-swap; never Gaussian noise as primary.
+4. **Corruption type** for the robustness check and the patching reference. Section 8.2. The primary oracle is masking (§8.1); token-swap is the robustness/AP-reference corruption (default), never Gaussian noise.
 5. **Correctness metric and threshold** for the flip test. Section 9.2. Pre-registered default: F1 >= 0.5 primary, EM robustness.
 6. **Dropping the transcoder token substrate** if gate 11.2c fails. Section 4.4. This is a finding, not a silent fallback; the human should confirm it is reported as such.
 7. **Budget points** for the flip test, tuned so 11.3b lands in the usable band. Section 9.3.
@@ -443,7 +456,7 @@ Recorded so future-you remembers why, and so reviewers see the choices were deli
 - **Instruct model with base-trained SAEs** for deployment realism, accepting somewhat higher SAE reconstruction error (Llama Scope reports acceptable base-to-finetuned transfer), with the captured-variance control guarding the interpretation.
 - **Transcoders over residual SAEs** for cleaner attribution; attention-output SAEs excluded entirely on the authors' own dead-feature warning.
 - **Wu and QRHead both included** as distinct signals, converting a scientific fork into one of the headline disagreement measurements; this also pre-empts the "you used the wrong retrieval-head definition" review objection.
-- **Token ablation as the oracle**, deliberately the same operation as KV eviction, so the oracle measures the thing the payoff stresses; attribution patching is the validated cheap approximation.
+- **Token masking as the oracle** (Definition 2; `oracle/masking.py`), read as an *upper-bound proxy* (analogue) for the per-token information loss KV eviction induces, not the identical operation — the empirical bridge to eviction is the flip test. **[Update 2026-06-05]** This supersedes the earlier "deliberately the same operation as KV eviction" framing; symmetric token-swap is demoted to the robustness corruption (§8.2). Attribution patching remains the validated cheap approximation, with a pinned 150-instance exact-masking fallback when its fidelity gate fails.
 - **Token-level eviction (H2O, SnapKV)** for the flip test, which sidesteps the GQA query/KV-head granularity issue entirely; head-level eviction (DuoAttention) is deferred to future work where the query-to-KV-group pooling becomes necessary.
 - **Deterministic correctness metric** (no LLM judge in the core) for reproducibility; judge is an optional robustness pass.
 - **Core at 1K to 4K context** with sentence-granularity oracle and attribution-patching, keeping the whole project on a single 80GB GPU.
