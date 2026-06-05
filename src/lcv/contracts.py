@@ -64,9 +64,14 @@ class CompressionMethod(str, Enum):
 
 
 class CorruptionType(str, Enum):
-    """Corruption for patching-based oracle estimates (§8.2). Never Gaussian."""
+    """Robustness corruption + attribution-patching reference (§8.2). Never Gaussian.
 
-    TOKEN_SWAP = "token_swap"  # primary
+    The primary oracle is token masking (Definition 2, §8.1); these corruptions are
+    secondary: the oracle-ranking robustness check (gate 11.2b) and the corrupted
+    reference for the ``E_hat`` estimator (§8.3).
+    """
+
+    TOKEN_SWAP = "token_swap"  # primary corruption (robustness / AP reference)
     DOCUMENT_SWAP = "document_swap"  # coarser, for multi-hop
 
 
@@ -273,7 +278,8 @@ class RetrievalHeadSet:
 class OracleEffect:
     """Per-token (or per-span) causal effect for one instance (§8).
 
-    ``E`` is the true ablation effect; ``E_hat`` is the attribution-patching
+    ``E`` is the true **masking** effect (Definition 2, §8.1: token ``t``'s K/V
+    removed from attention at every layer); ``E_hat`` is the attribution-patching
     estimate validated against it by gate 11.2a.
     """
 

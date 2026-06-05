@@ -1,7 +1,12 @@
 """Causal oracle.
 
-True token/span ablation ``E(t)`` (§8.1), the attribution-patching
-approximation ``E_hat`` with its fidelity gate (§8.3), and the corruption
-module (§8.2). The oracle is the same operation as KV eviction, so it measures
-what the flip test stresses.
+The primary oracle is **token masking** ``E(t)`` (paper Definition 2, §8.1):
+:mod:`lcv.oracle.masking` (with :mod:`lcv.oracle.ablation` as a legacy alias). The
+attribution-patching approximation ``E_hat`` and its fidelity gate live in
+:mod:`lcv.oracle.attr_patching` (§8.3); the pinned 150-instance exact-masking
+fallback in :mod:`lcv.oracle.adjudication`. The corruption module (§8.2) supplies
+the token-swap robustness corruption (and the patching reference), demoted from
+the primary oracle. Masking is read as an *upper-bound proxy* for the per-token
+information loss KV eviction induces, not the identical operation; the empirical
+bridge to eviction is the flip test (§9).
 """

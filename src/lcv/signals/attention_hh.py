@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..contracts import ImportanceVector, Instance, Method
+from .normalization import normalize_importance
 
 if TYPE_CHECKING:  # hints only
     import torch
@@ -30,17 +31,13 @@ if TYPE_CHECKING:  # hints only
 
 
 def _normalize_importance(values: np.ndarray, normalization: str) -> np.ndarray:
-    """Per-instance normalization (``minmax`` | ``zscore``), uniform per run (§5)."""
-    v = np.asarray(values, dtype=float)
-    if v.size == 0:
-        return v
-    if normalization == "minmax":
-        lo, hi = float(v.min()), float(v.max())
-        return (v - lo) / (hi - lo) if hi > lo else np.zeros_like(v)
-    if normalization == "zscore":
-        mu, sd = float(v.mean()), float(v.std())
-        return (v - mu) / sd if sd > 0 else np.zeros_like(v)
-    raise ValueError(f"unknown normalization {normalization!r}")
+    """Per-instance normalization (``minmax`` | ``zscore``); see ``normalization``.
+
+    Thin alias kept for back-compat; delegates to the shared
+    :func:`lcv.signals.normalization.normalize_importance` so the attention signal
+    and the transcoder reduction normalize identically.
+    """
+    return normalize_importance(values, normalization)
 
 
 def accumulated_attention_from_patterns(

@@ -1,13 +1,19 @@
-"""Corruption construction for patching-based oracle estimates (addendum §8.2).
+"""Robustness corruption + patching reference (addendum §8.2).
 
-Attribution patching (§8.3) needs a *corrupted reference* to form the activation
-delta. The choice of corruption is load-bearing: Zhang & Nanda show Gaussian-noise
-corruption is fragile and hyperparameter-sensitive, so it is **forbidden** here.
+**The primary oracle is token masking** (Definition 2, §8.1, :mod:`lcv.oracle.
+masking`). Token-swap plays two *secondary* roles: (i) the oracle-ranking
+robustness check (gate 11.2b: re-derive the ranking under a swap and report its
+overlap with the masking ranking), and (ii) the *corrupted reference* the
+attribution-patching estimator (§8.3) needs to form the activation delta. The
+choice of corruption is load-bearing: Zhang & Nanda show Gaussian-noise corruption
+is fragile and hyperparameter-sensitive, so it is **forbidden** here.
 
-* **Token-swap (primary).** Replace the gold span / needle with a different
-  plausible span so the answer is no longer supported. Length-preserving, so the
-  corrupted run stays token-aligned with the clean run (required to subtract
-  activations position-by-position).
+* **Token-swap (primary corruption).** Replace the gold span / needle with a
+  different plausible span so the answer is no longer supported. Length-preserving,
+  so the corrupted run stays token-aligned with the clean run (required to subtract
+  activations position-by-position). Note the swap perturbs neighboring positions'
+  residual streams through their attention to the swapped token, which masking does
+  not -- one reason masking, not swap, is the primary oracle (§8.2).
 * **Document-swap (coarser).** Replace the supporting document with a distractor;
   used for the multi-hop sets.
 
@@ -16,7 +22,7 @@ so gate 11.2b can show the oracle's top-token set is stable across corruptions
 (i.e., the oracle is not as arbitrary as the methods it judges).
 
 Pure numpy — operates in token-id space. The char->token mapping that locates the
-gold span lives in the tokenization module; the true ablation E(t) and E_hat live
+gold span lives in the tokenization module; the true masking E(t) and E_hat live
 in the GPU oracle modules.
 """
 
@@ -29,7 +35,7 @@ import numpy as np
 from ..agreement import top_k_jaccard
 from ..contracts import CorruptionType
 
-# The pre-registered default corruption (§8.2).
+# The pre-registered default corruption (§8.2); secondary to the masking oracle.
 PRIMARY = CorruptionType.TOKEN_SWAP
 
 
