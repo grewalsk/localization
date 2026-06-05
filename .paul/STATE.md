@@ -4,7 +4,7 @@
 A training-free, per-instance signal — cross-method disagreement `D(x)` — that flags which inputs an aggressive KV-compression method will break, grounded in a causal oracle so the result is more than "the tools are noisy."
 
 ## Current Focus
-CPU foundation complete. The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), NIAH data (§10), tokenization (§3.3/11.1e), and the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10) over a shared gold-mapping core — plus the §11 phase-gate suite (phase0–4) is implemented and green in CI (151 CPU tests pass). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. Remaining work is GPU-bound and waits on the rented H100.
+CPU foundation complete. The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), NIAH data (§10), tokenization (§3.3/11.1e), and the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10) over a shared gold-mapping core — plus the §11 phase-gate suite (phase0–4) is implemented and green in CI (151 CPU tests pass). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. A separate **CPU-only smoke path** (`smoke` extra: gpt2 + HF eager attention) now runs the full pipeline spine end-to-end on a laptop; the accumulated-attention signal is factored into a backbone-portable core (`accumulated_attention_from_patterns`, tensor-in) shared by the CPU path and the future TL `hook_pattern` path, so a backbone/OOM swap rewrites one accessor, not the signals. Plumbing only — gpt2 has no localization ground truth, so passing means "the wiring runs", not "the method is right". CI stays torch-free and green (151 pass); `--extra smoke` exercises 161 (the 10 `needs_model` tests, incl. 7 new gpt2 smoke checks). Remaining science work is GPU-bound and waits on the rented H100.
 
 ## Milestone
 **M0 — Convergent-Validity Result** (v0.1.0) · status: in_progress
@@ -41,6 +41,24 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
   renamed (`hotpot_qa`→`hotpotqa/hotpot_qa`, `THUDM/LongBench`→`zai-org/LongBench`,
   `trivia_qa`→`mandarjoshi/trivia_qa`); fixed at the root as dated errata in addendum
   §10/§12 + spec §5.7. LongBench needs `trust_remote_code=True` (script-based).
+- **CPU-only end-to-end smoke on gpt2** (`48e0086`): new `lcv.model.hf_backbone`
+  reads HF eager attention as plain numpy `[L,H,q,k]` + the §3.3 content mask, with
+  torch/transformers imported lazily so `import lcv` stays torch-free (verified). It
+  feeds the *same* signal logic as the GPU path via a new backbone-portable core,
+  `accumulated_attention_from_patterns` (tensor-in, no model object). `scripts/smoke_cpu.py`
+  + `tests/test_cpu_smoke.py` (`needs_model`) prove the spine on gpt2: attention rows
+  sum to 1 (gate 11.0d analog), gold needle maps back through the real tokenizer (gate
+  11.1e), importance well-formed, two query regions → finite D(x). Added the `smoke`
+  extra (torch+transformers only; **not** the TL/CUDA science stack — GPU/TL stubs
+  untouched). Also hardened two latent `needs_model` tests this extra exercised for the
+  first time (transformers was never installed before, so they always auto-skipped):
+  `test_import_is_torch_free` now checks in a fresh subprocess (process-global
+  `sys.modules` is polluted once any sibling test imports torch), and phase1 11.1e
+  enforces specials-exclusion only when the template actually emits specials (the CI
+  stand-in `hf-internal-testing/llama-tokenizer` is the Llama-2 `[INST]` template whose
+  role tags are ordinary text — nothing to drop; the real Llama-3.1 template has true
+  specials). Gold-maps-back is still asserted every run; specials-dropping stays pinned
+  model-free by the synthetic CPU-core test.
 
 ## Blockers / Watch-outs
 - **Provably-correct gate:** a phase is green only when it reproduces a published number, not when it runs. The failure mode is clean-but-wrong code.
@@ -57,4 +75,4 @@ Provision the SF Compute H100, install the `gpu` extra, and run the model-bound 
 
 ---
 *STATE.md — the live cursor. Updated every loop step.*
-*Last updated: 2026-06-02*
+*Last updated: 2026-06-05*
