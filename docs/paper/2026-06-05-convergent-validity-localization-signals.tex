@@ -1,0 +1,658 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage[round]{natbib}
+\usepackage{hyperref}
+\geometry{margin=1in}
+
+\newtheorem{definition}{Definition}
+\newtheorem{hypothesis}{Hypothesis}
+\newtheorem{remark}{Remark}
+
+\newcommand{\Spearman}{\rho_{s}}
+\DeclareMathOperator{\AUROC}{AUROC}
+\DeclareMathOperator{\sign}{sign}
+
+\title{Convergent Validity of Localization Signals in Language-Model Inference}
+\author{Kabir Singh Grewal}
+\date{}
+
+\begin{document}
+\maketitle
+
+%======================================================================
+\begin{abstract}
+A growing family of inference-time methods is justified by a claim of the
+form \emph{``the information needed for this prediction lives at component
+or token $X$.''} KV-cache eviction retains heavy-hitter tokens, head-aware
+compression retains retrieval heads, and interpretability probes read
+task-relevant content from specific positions or dictionary features. Each
+method is validated against its own downstream objective; almost none are
+validated against one another. We ask, \emph{per instance}, whether these
+localization signals (i)~\textbf{agree} on where information lives,
+(ii)~each \textbf{track a per-instance causal oracle} defined by token
+masking---a causal analogue for the per-token information loss that eviction
+induces---and (iii)~whether their
+\textbf{disagreement carries information about KV-compression failure}
+beyond trivial difficulty proxies such as context length, retrieval depth,
+and model confidence. We organize signals into \emph{substrates} that answer
+mechanistically distinct questions---input attribution (which context token
+mattered) versus internal-confidence localization (where the model
+represents that it knows)---and compute agreement only within a substrate.
+Our central comparison is cross-family: whether attention-based and
+dictionary-based (transcoder) signals, which process the model through
+different machinery, converge on the same tokens, and whether either tracks
+the causal oracle. Because distributed storage (high disagreement) is as
+plausibly \emph{robust} to fixed-budget eviction as it is fragile, we treat
+the direction of any disagreement--fragility relationship as an open
+empirical question and pre-register a two-sided test. The contribution is
+the per-instance convergent-validity framework and its causal grounding; any
+predictive relationship between disagreement and compression failure is an
+independent secondary result.
+\end{abstract}
+
+%======================================================================
+\section{Introduction}
+
+A localization claim asserts that the information a model uses for a specific
+prediction is concentrated at an identifiable site---a set of tokens, a set
+of attention heads, or a set of dictionary features. Such claims underwrite
+a wide class of deployed inference methods. KV-cache eviction schemes retain
+tokens judged to be heavy hitters and discard the rest; head-aware
+compression retains heads identified as retrieval-relevant; and a parallel
+line of interpretability work reads task content from probe directions or
+sparse-dictionary features at specific positions. Each method is validated
+against its own objective: an eviction scheme is judged by downstream task
+accuracy under a memory budget, a probe by its detection accuracy. Almost
+none are validated \emph{against each other}.
+
+Two negative results bound what any \emph{single} localization method can
+claim. \citet{hase2023} showed that the layer causal tracing identifies as
+most important is largely not the layer at which model editing succeeds:
+across most settings the localization signal and the intervention that works
+are close to orthogonal, and even in the one variant where tracing is weakly
+informative, it remains better to ignore the tracing result and edit an
+early-to-mid-layer weight.
+\citet{kantamneni2025} showed that sparse-autoencoder probes do not
+reliably outperform logistic regression on raw activations across four
+probing regimes (data scarcity, class imbalance, label noise, covariate
+shift): the interpretable representation adds nothing over the raw signal
+on that task. Both results bound a single method's localization claim.
+Neither asks the meta-question this paper poses: if we line up the
+localization signals practitioners actually use and ask them, on a specific
+input, to point at the tokens or components that mattered, do they
+\emph{agree with each other}, and does any of them agree with what a causal
+intervention reveals?
+
+We make this question precise as a problem of \emph{convergent validity}---a
+construct-validation criterion borrowed from measurement theory: multiple
+instruments intended to measure the same latent quantity should covary, and
+should covary with an external criterion. Here the latent quantity is
+``where the information for this prediction lives,'' the instruments are the
+deployed localization signals, and the external criterion is a per-instance
+causal oracle. We evaluate convergent validity \emph{per instance} rather
+than in aggregate, on the \emph{deployed inference objects} rather than on
+stylized circuit-discovery tasks, and with a causal oracle constructed as a
+close analogue of the per-token information loss that eviction induces.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item A per-instance convergent-validity framework for localization
+  signals, with a substrate taxonomy that separates input attribution from
+  internal-confidence localization and computes agreement only within a
+  substrate (\S\ref{sec:formalization}).
+  \item A causal-grounding criterion: a per-instance token-masking oracle
+  constructed as a close analogue of the information loss KV eviction
+  induces, against which each signal's fidelity is measured
+  (\S\ref{sec:oracle}).
+  \item A pre-registered, two-sided test of whether cross-method
+  disagreement carries information about KV-compression failure beyond
+  difficulty confounds, together with a battery of robustness checks that
+  distinguish genuine localization plurality from dictionary
+  reconstruction error (\S\ref{sec:fragility},~\S\ref{sec:robustness}).
+\end{enumerate}
+
+\paragraph{What we do not claim.}
+We do not claim that any single method localizes well; \citet{hase2023} and
+\citet{kantamneni2025} already bound this. We do not claim a direction for
+the disagreement--fragility relationship; our test is two-sided by design.
+We do not claim that all signals studied are deployed in production: KV
+heavy-hitters and retrieval heads are deployment-grounded, whereas
+dictionary features and confidence probes are candidate localization claims
+drawn from the interpretability literature, included for the cross-substrate
+comparison. And we do not treat within-family agreement as evidence on its
+own, since signals computed from the same attention tensors are expected to
+covary for partly mechanical reasons; the non-trivial comparison is
+cross-family.
+
+%======================================================================
+\section{Problem Formalization}
+\label{sec:formalization}
+
+\paragraph{Instances.}
+An instance $x$ consists of a rendered prompt with an identified set of
+\emph{content tokens} $\mathcal{C}(x) = \{1,\dots,T\}$ (special and
+chat-template tokens excluded by a fixed tokenizer-offset mask), a gold
+answer span, and an answer string. We write $M$ for the language model and
+$y(x)$ for the model's answer under the full KV cache.
+
+\paragraph{Localization signals.}
+A \emph{token-attribution signal} is a map producing a normalized importance
+vector over content tokens,
+\[
+  s : x \;\longmapsto\; \mathbf{a}^{(s)}(x) \in [0,1]^{T},
+\]
+where larger $a^{(s)}_t$ means token $t$ is judged more important for
+$y(x)$. A \emph{component signal} is a map producing a score over the query
+heads of the model,
+\[
+  s : x \;\longmapsto\; \mathbf{h}^{(s)}(x) \in \mathbb{R}^{H},
+\]
+with $H$ the number of query heads. We study six signals. On the attention
+side: accumulated attention (the heavy-hitter score that drives H2O-style
+eviction) and two retrieval-head scores---the query-agnostic copy-paste
+score of \citet{wu2024} and the query-focused QRscore of \citet{zhang2025},
+which aggregates query-context attention and yields a distinct head set. On
+the dictionary side: transcoder feature attribution, which natively produces
+scores over \emph{features} and is reduced to a per-token vector by the
+attribution defined in \S\ref{sec:formalization-reduction}. For the
+internal-confidence question we include two signals---an
+inference-time-intervention head set \citep{li2023iti} and an
+exact-answer-token probe \citep{orgad2024}. Both were developed to localize
+\emph{truthfulness} rather than ``knowing''; we treat them as candidate
+proxies for internal-confidence localization, not as established measures of
+it, and defend the relabeling in Remark~\ref{rem:confidence}.
+
+\paragraph{Substrates.}
+A \emph{substrate} is a set of signals that answer the same localization
+question and are therefore commensurable. We define three:
+\begin{itemize}
+  \item \textbf{token-attribution}: which content token caused the answer
+  (accumulated attention, retrieval-head--induced token importance from the
+  Wu and QRHead head sets, and transcoder feature attribution reduced to
+  tokens per \S\ref{sec:formalization-reduction});
+  \item \textbf{component}: which heads carry the retrieval computation
+  (the Wu head set, the QRHead head set, and the ITI head set);
+  \item \textbf{answer-position}: where the model internally represents that
+  it knows the answer (ITI directions, exact-answer-token probe).
+\end{itemize}
+Agreement is computed \emph{only within} a substrate; substrates are never
+merged. The answer-position substrate addresses a distinct question
+(internal confidence rather than input attribution) and is reported
+separately.
+
+\begin{remark}[The substrate distinction is a category boundary, not a
+convenience]
+Input attribution and internal-confidence localization are different
+questions. ``Which context token caused the answer'' and ``where does the
+model represent that it knows the answer'' need not have related answers:
+a model may represent high confidence in a position that carries none of the
+causal content. Merging them into a single ``where does the information
+live'' score is a category error, and the separation is part of the
+contribution.
+\end{remark}
+
+The ITI head set appears in two substrates---component and
+answer-position---but is never double-counted within a single agreement
+computation. It enters the component substrate as one instrument measuring
+\emph{which heads carry retrieval}, and the answer-position substrate as one
+instrument measuring \emph{where the answer is internally represented}.
+These are two distinct construct measurements that happen to share an
+instrument, which is admissible: agreement is always computed among the
+members of one substrate, so ITI contributes to two separate agreement
+matrices, not twice to the same one.
+
+\begin{remark}[Truthfulness signals as candidate confidence proxies]
+\label{rem:confidence}
+ITI \citep{li2023iti} and the exact-answer-token probe \citep{orgad2024}
+were developed to localize truthfulness, which is not identical to ``where
+the model represents that it knows the answer.'' We therefore treat them as
+candidate proxies rather than established measures. The strongest support for
+the proxy is \citet{orgad2024}'s finding that a model can internally encode
+the correct answer while generating an incorrect one: this dissociation
+between internal representation and output is precisely the
+``knows-but-does-not-say'' structure an internal-confidence signal should
+capture, and it is what licenses reading the exact-answer-token probe as a
+confidence localizer. We report the answer-position substrate separately
+(RQ4) and do not let its interpretation bear on the token-attribution
+results.
+\end{remark}
+
+\subsection{Reducing transcoder attribution to a per-token vector}
+\label{sec:formalization-reduction}
+
+The attention signals and the oracle are natively defined over content
+tokens, but transcoder attribution is natively defined over \emph{features}:
+it scores which sparse features contribute to the answer, and a feature may
+fire at one position while encoding information gathered from many context
+tokens. Placing transcoder attribution in the token-attribution substrate
+therefore requires an explicit feature-to-token reduction, and the choice of
+reduction is a load-bearing design decision rather than a formality, because
+it determines what ``the transcoder localizes token $t$'' even means.
+
+We adopt \emph{input-gradient attribution} as the primary reduction.
+Let $\mathcal{F}(x)$ index the transcoder features active on instance $x$,
+let $g_f(x)$ be the attribution of the answer to feature $f$ (its
+contribution to the answer logit, e.g.\ via attribution patching on the
+feature's activation), and let $z_f$ be that feature's pre-activation. The
+contribution of feature $f$ is distributed over content tokens in proportion
+to how much each token's embedding $\mathbf{e}_t$ drives the feature, measured
+by the gradient of the pre-activation with respect to the embedding:
+\[
+  w_{f,t}(x)
+  \;=\;
+  \Bigl\lVert \frac{\partial z_f}{\partial \mathbf{e}_t} \Bigr\rVert_2 ,
+  \qquad
+  a^{(\mathrm{tc})}_t(x)
+  \;=\;
+  \sum_{f \in \mathcal{F}(x)}
+  \lvert g_f(x) \rvert \;
+  \frac{w_{f,t}(x)}{\sum_{t'} w_{f,t'}(x)} .
+\]
+The resulting vector $\mathbf{a}^{(\mathrm{tc})}(x)$ is min--max normalized to
+$[0,1]^T$ like the other token-attribution signals. The intuition is that a
+feature's answer-relevance $\lvert g_f \rvert$ is attributed back to the
+content tokens it actually \emph{read}, traced through the gradient, rather
+than to the single position where it happened to fire.
+
+This is the choice the verification of Hypothesis~\ref{hyp:agreement}
+depends on, so we treat it as a decision to validate, not to assume. As a
+robustness check we re-run the cross-family agreement analysis under a
+simpler \emph{firing-position} reduction, which attributes each feature's
+$\lvert g_f \rvert$ to the position(s) at which it fires, and report whether
+the agreement conclusion is stable across the two reductions. A conclusion
+that flips between reductions would indicate that ``do attention and
+transcoder converge on the same tokens'' is an artifact of the reduction
+rather than a fact about the model; a stable conclusion licenses the
+cross-family comparison.
+
+Fix a substrate $S$ with member signals indexed $s \in S$. For each instance
+$x$ and each pair $(s,s') \in S \times S$ we measure rank agreement between
+the importance vectors restricted to content tokens (for token-attribution)
+or to query heads (for component) using the Spearman rank correlation
+\[
+  \Spearman^{(s,s')}(x)
+  \;=\;
+  \operatorname{corr}\!\bigl(
+    \operatorname{rank} \mathbf{a}^{(s)}(x),\,
+    \operatorname{rank} \mathbf{a}^{(s')}(x)
+  \bigr).
+\]
+We use Spearman as the primary metric because the signals are calibrated on
+different scales and only their induced rankings are comparable. As
+secondary metrics we report set overlap at top-$k$ via the Jaccard index
+\[
+  J_k^{(s,s')}(x)
+  \;=\;
+  \frac{\bigl| \mathrm{top}_k\,\mathbf{a}^{(s)}(x) \cap
+               \mathrm{top}_k\,\mathbf{a}^{(s')}(x) \bigr|}
+       {\bigl| \mathrm{top}_k\,\mathbf{a}^{(s)}(x) \cup
+               \mathrm{top}_k\,\mathbf{a}^{(s')}(x) \bigr|},
+\]
+and rank-biased overlap (RBO) to weight agreement near the top of the
+ranking, which is the regime a fixed-budget eviction scheme cares about.
+
+\begin{definition}[Per-instance disagreement]
+\label{def:disagreement}
+The disagreement score of instance $x$ within substrate $S$ is one minus the
+mean pairwise Spearman correlation over distinct signal pairs,
+\[
+  D_S(x)
+  \;=\;
+  1 \;-\;
+  \frac{2}{|S|\,(|S|-1)}
+  \sum_{\substack{s,s' \in S \\ s < s'}}
+  \Spearman^{(s,s')}(x)
+  \;\in\; [0,2].
+\]
+$D_S(x)$ is computed from the \emph{full-cache forward pass only}; it never
+observes any compressed run. This is the structural leakage guarantee for
+\S\ref{sec:fragility}.\footnote{We average the pairwise correlations
+directly rather than via the Fisher $z$-transform. The $z$-transform would
+remove a small bias in averaging correlations, but the resulting index is
+monotone in the direct mean over the range we observe and the direct form is
+the conventional choice for a disagreement score; we use it for
+interpretability and report robustness to the $z$-transformed variant where
+it matters.}
+\end{definition}
+
+\begin{remark}[Within-family agreement is partly mechanical]
+Accumulated attention and retrieval-head token importance are both
+functions of the same attention tensors; retrieval heads are identified by
+their attention patterns. Their pairwise agreement is therefore expected to
+be high for reasons that do not bear on localization plurality. We report it
+as a controlled baseline. The informative quantity is the cross-family
+correlation between an attention-derived signal and the transcoder signal,
+which read the model through different mechanisms (attention routing versus
+the MLP computation on the residual stream) and therefore localize
+potentially different steps of the same task.
+\end{remark}
+
+To distinguish substantive agreement from chance under the finite token
+budget, we calibrate each per-instance correlation against a permutation
+null obtained by shuffling one ranking, yielding a per-instance $p$-value;
+across instances we control the false discovery rate by the
+Benjamini--Hochberg procedure, falling back to the Benjamini--Yekutieli
+procedure if the per-instance tests show dependence that violates the
+positive-dependence assumption.
+
+%======================================================================
+\section{The Causal Oracle}
+\label{sec:oracle}
+
+A localization signal can look authoritative on its own task yet fail to
+identify the tokens that causally determine the answer. We therefore define
+a per-instance causal criterion against which every signal is scored. We
+construct the criterion to be as close as possible to the information loss a
+KV-eviction scheme induces, while being explicit that it is an analogue and
+not the identical operation (see the discussion of mechanical differences
+below).
+
+\begin{definition}[Causal effect under masking]
+\label{def:oracle}
+For instance $x$ and content token $t$, let $\ell\bigl(y(x) \mid x\bigr)$ be
+the model's log-probability of its full-cache answer, and let $x^{\setminus t}$
+be the forward pass in which token $t$'s contribution is \emph{masked}: its
+key/value entries are removed from attention at every layer, so that no query
+at any position can attend to $t$, while all other tokens' cached
+representations are left in place. The causal effect of $t$ is the induced
+drop in answer log-probability,
+\[
+  E(t)
+  \;=\;
+  \ell\bigl(y(x) \mid x\bigr)
+  \;-\;
+  \ell\bigl(y(x) \mid x^{\setminus t}\bigr).
+\]
+\end{definition}
+
+We use masking rather than Gaussian noise on activations, which would push
+activations off-distribution \citep{zhang2024}; masking removes a token's
+availability without injecting off-manifold signal. Masking is also the
+operation by which H2O validated its heavy-hitter criterion, which aligns the
+oracle with the deployment method it targets. As a robustness check we report
+stability of the resulting ranking under symmetric token replacement
+\citep{zhang2024}, an alternative on-manifold corruption that swaps the input
+token rather than masking its cache entry; conclusions are reported only where
+they hold across both corruptions.
+
+\paragraph{The oracle is an analogue of eviction, not the same operation.}
+Masking a token's key/value entries is the closest single-token analogue of
+KV eviction available within a clean causal-effect definition, but it is not
+identical to what an eviction scheme does, and we do not claim it is. Three
+mechanical differences remain. First, eviction \emph{drops} a stored
+key/value vector, whereas even masking leaves the question of what was already
+computed at earlier positions untouched in a different way than a deployed
+cache eviction interacts with the generation loop; the oracle reads a single
+counterfactual forward pass, not the autoregressive trajectory an eviction
+scheme actually runs under. Second, eviction operates per-layer on cached
+$K/V$ as decoding proceeds, removing availability to \emph{future} queries,
+whereas the oracle's masking is applied uniformly across the prompt's forward
+pass. Third, the symmetric-swap robustness variant changes the residual
+stream of neighboring positions through their attention to the swapped token,
+propagating from the embedding upward, which eviction does not do at all.
+Because the causal-grounding contribution rests on the oracle, we therefore
+read $E(t)$ as an \emph{upper-bound proxy} for the per-token information loss
+eviction induces, and we test signals against it on that understanding rather
+than treating fidelity to $E$ as fidelity to eviction itself. The empirical
+bridge to eviction is the flip test of \S\ref{sec:fragility}, which uses the
+deployed schemes directly.
+
+\paragraph{Fidelity.}
+Each token-attribution signal $s$ is scored by the rank correlation between
+its importance vector and the oracle effect,
+\[
+  F(s; x)
+  \;=\;
+  \Spearman\!\bigl( \mathbf{a}^{(s)}(x),\, \mathbf{E}(x) \bigr),
+\]
+where $\mathbf{E}(x) = (E(1),\dots,E(T))$. Computing $E(t)$ exactly requires
+one masked forward pass per content token. We therefore admit an
+attribution-patching estimator $\widehat{E}(t)$---a first-order Taylor
+approximation requiring two forward passes and a single backward pass,
+independent of the number of tokens \citep{nanda2022,kramar2024}---for the
+full sweep, gated by a fidelity requirement: $\widehat{E}$ is used only where
+\[
+  \Spearman\!\bigl( \widehat{\mathbf{E}}(x),\, \mathbf{E}(x) \bigr) \;\ge\; 0.8
+\]
+on a verification subsample; otherwise we fall back to exact masking on the
+adjudication subset. This gate guarantees the criterion that adjudicates all
+downstream claims is itself trustworthy, and directly addresses
+attribution patching's known failure mode of underestimating effects for
+distributed, high-magnitude activations \citep{kramar2024}.
+
+\begin{remark}[The oracle is what adjudicates convergent validity]
+Pairwise agreement between two signals does not by itself establish that
+either is correct. Two signals can agree because both are right (both track
+$\mathbf{E}$) or because both share the same artifact. Fidelity to the
+oracle separates these cases. Convergent validity in the strong sense we
+test requires both \emph{covariation among signals} and \emph{covariation of
+each signal with the external causal criterion}.
+\end{remark}
+
+%======================================================================
+\section{Disagreement and Compression Fragility}
+\label{sec:fragility}
+
+The deployment-facing question is whether the per-instance disagreement
+$D_S(x)$, measured before any compression, carries information about whether
+a fixed-budget KV-eviction scheme will flip a correct answer to an incorrect
+one.
+
+\begin{definition}[Flip]
+For a compression method $m$ (e.g.\ H2O, SnapKV) at memory budget $b$, let
+$c_{\mathrm{full}}(x) \in \{0,1\}$ indicate whether the full-cache answer is
+correct and $c_{m,b}(x) \in \{0,1\}$ whether the compressed answer is
+correct, both under a deterministic correctness metric (token-level $F_1
+\ge 0.5$ as primary, exact match as robustness). Instance $x$
+\emph{flips} under $(m,b)$ if
+\[
+  \mathrm{flip}_{m,b}(x) \;=\; \mathbf{1}\!\left[
+    c_{\mathrm{full}}(x) = 1 \;\wedge\; c_{m,b}(x) = 0
+  \right].
+\]
+\end{definition}
+
+Flips are defined only on instances answered correctly under the full cache,
+so that the event is a genuine compression-induced failure rather than a
+pre-existing error. We model the flip probability with logistic regression
+and ask whether $D_S(x)$ adds explanatory power over a confound-only model:
+\begin{align}
+  \text{(confounds only)} \quad
+  &\operatorname{logit} \Pr[\mathrm{flip}_{m,b}(x)=1]
+   = \beta_0 + \boldsymbol{\beta}_z^\top \mathbf{z}(x), \\[4pt]
+  \text{(confounds + disagreement)} \quad
+  &\operatorname{logit} \Pr[\mathrm{flip}_{m,b}(x)=1]
+   = \beta_0 + \boldsymbol{\beta}_z^\top \mathbf{z}(x) + \gamma\,D_S(x),
+\end{align}
+where $\mathbf{z}(x)$ collects the difficulty proxies (context length,
+retrieval depth, full-cache answer confidence). The test of interest is on
+$\gamma$, evaluated by a likelihood-ratio test between the two nested models
+and by the change in cross-validated predictive performance ($5$-fold,
+held-out $\AUROC$). We report the confound-only $\AUROC$ \emph{before}
+introducing $D_S(x)$, so that any incremental contribution is visible and
+not absorbed silently. We report both the LRT and the held-out $\AUROC$
+change deliberately: a coefficient can be statistically significant under the
+LRT while adding little held-out discrimination, and the two answers need not
+agree, so we treat a significant $\gamma$ as necessary but not sufficient for
+a claim of practical predictive value.
+
+\begin{remark}[Why the sign is left free]
+A high $D_S(x)$ admits two opposing mechanistic readings. If disagreement
+reflects that the answer-relevant information is \emph{distributed} across
+many tokens or components, a fixed-budget eviction is \emph{less} likely to
+remove all of it, predicting robustness ($\gamma < 0$). If disagreement
+reflects that the signals are jointly \emph{mis-localized}, whatever the
+scheme retains is more likely to miss the load-bearing tokens, predicting
+fragility ($\gamma > 0$). We do not have an a priori reason to prefer either,
+so the hypothesis below is two-sided and pre-registered as such.
+\end{remark}
+
+%======================================================================
+\section{Hypotheses}
+\label{sec:hypotheses}
+
+We state the claims the experiments will adjudicate. None is assumed; each is
+a hypothesis whose resolution---in either direction---is reportable.
+
+\begin{hypothesis}[Within-substrate agreement structure]
+\label{hyp:agreement}
+Within the token-attribution substrate, cross-family pairwise agreement
+(attention-derived vs.\ transcoder) is systematically lower than
+within-family agreement (attention-derived vs.\ attention-derived), and
+varies with task difficulty and context length. Formally, the mean
+cross-family Spearman is bounded away below from the mean within-family
+Spearman.
+\end{hypothesis}
+
+\begin{hypothesis}[Causal grounding]
+\label{hyp:fidelity}
+Each signal's fidelity $F(s;x)$ to the oracle is the quantity that decides
+whether observed (dis)agreement reflects genuine localization plurality.
+Three mutually exclusive outcomes are admissible and each is reportable:
+(a)~the dictionary signal tracks the oracle and an attention signal does not,
+(b)~the reverse, or (c)~neither tracks the oracle strongly. The data select
+among these.
+\end{hypothesis}
+
+\begin{hypothesis}[Disagreement carries fragility information]
+\label{hyp:fragility}
+The coefficient $\gamma$ on $D_S(x)$ in the flip model is nonzero after
+controlling for difficulty confounds:
+\[
+  H_0\!:\ \gamma = 0
+  \qquad\text{vs.}\qquad
+  H_1\!:\ \gamma \ne 0 .
+\]
+The test is two-sided. A failure to reject is itself informative: it bounds
+what cross-method disagreement adds beyond difficulty proxies. A degenerate
+case---insufficient variance in $D_S(x)$ to test---is reported as such rather
+than as a null, and in that case the primary result reverts to
+Hypothesis~\ref{hyp:fidelity}.
+\end{hypothesis}
+
+%======================================================================
+\section{Robustness: Distinguishing Plurality from Reconstruction Error}
+\label{sec:robustness}
+
+The central threat to any cross-family disagreement result is that the
+transcoder signal disagrees with attention \emph{because the transcoder is a
+lossy approximation of the residual stream}, not because localization is
+genuinely plural. We address this with tests built into the design rather
+than by argument.
+
+\paragraph{(i) Oracle adjudication.}
+Disagreement is evidence of plurality only if the disagreeing signals do not
+both collapse onto the oracle. By Hypothesis~\ref{hyp:fidelity}, a signal
+enters the analysis as informative only if it tracks $\mathbf{E}(x)$; a
+transcoder that fails the fidelity gate is dropped and reported as a finding,
+not treated as a source of disagreement.
+
+\paragraph{(ii) Reconstruction-error correlation.}
+The lossy hypothesis makes a falsifiable prediction: disagreement should
+concentrate on instances the transcoder reconstructs worst. Let
+$r(x)$ be the transcoder's reconstruction error on the answer-relevant
+positions. If
+\[
+  \Spearman\!\bigl( r(x),\, D_S(x) \bigr)
+\]
+is large and positive, the lossy reading is supported; if it is weak, the
+disagreement persists on cleanly reconstructed instances and the lossy
+reading is undercut. This test is evidence against the lossy reading, not
+proof against it: if $r(x)$ has low variance it cannot correlate with
+anything, and if lossiness degrades the ranking only at non-answer positions
+while $r(x)$ is measured at answer-relevant positions, the two can decouple
+even when lossiness does drive disagreement. We therefore treat the oracle
+adjudication in~(i) and the high-fidelity check in~(iii) as the primary
+adjudicators, with this correlation as corroborating evidence.
+
+\paragraph{(iii) High-fidelity feature check.}
+On an instance where a specific transcoder feature reconstructs the
+answer-relevant positions with near-zero error, persistent disagreement with
+the attention signal cannot be attributed to reconstruction loss. A single
+such case is a qualitative refutation of the lossy reading.
+
+\paragraph{Captured variance.}
+Throughout, we report the answer-relevant variance the transcoder captures,
+as a necessary (not sufficient) precondition; (i)--(iii) are what carry the
+argument.
+
+%======================================================================
+\section*{Acknowledgments}
+[omitted in draft]
+
+\bibliographystyle{plainnat}
+% \bibliography{lcv}  % uncomment once .bib is assembled
+\begin{thebibliography}{99}
+\bibitem[Hase et al.(2023)]{hase2023}
+P.~Hase, M.~Bansal, B.~Kim, and A.~Ghandeharioun.
+\newblock Does localization inform editing? Surprising differences in
+causality-based localization vs.\ knowledge editing in language models.
+\newblock NeurIPS 2023. arXiv:2301.04213.
+
+\bibitem[Kantamneni et al.(2025)]{kantamneni2025}
+S.~Kantamneni, J.~Engels, S.~Rajamanoharan, M.~Tegmark, and N.~Nanda.
+\newblock Are sparse autoencoders useful? A case study in sparse probing.
+\newblock ICML 2025. arXiv:2502.16681.
+
+\bibitem[Wu et al.(2025)]{wu2024}
+W.~Wu et al.
+\newblock Retrieval head mechanistically explains long-context factuality.
+\newblock ICLR 2025. arXiv:2404.15574.
+
+\bibitem[Zhang et al.(2025)]{zhang2025}
+W.~Zhang, F.~Yin, H.~Yen, D.~Chen, and X.~Ye.
+\newblock Query-focused retrieval heads improve long-context reasoning and
+re-ranking.
+\newblock EMNLP 2025. arXiv:2506.09944.
+
+\bibitem[Zhang et al.(2023)]{h2o}
+Z.~Zhang et al.
+\newblock H\textsubscript{2}O: Heavy-hitter oracle for efficient generative
+inference of large language models.
+\newblock NeurIPS 2023. arXiv:2306.14048.
+
+\bibitem[Li et al.(2024)]{snapkv}
+Y.~Li et al.
+\newblock SnapKV: LLM knows what you are looking for before generation.
+\newblock arXiv:2404.14469.
+
+\bibitem[Dunefsky et al.(2024)]{transcoders}
+J.~Dunefsky, P.~Chlenski, and N.~Nanda.
+\newblock Transcoders find interpretable LLM feature circuits.
+\newblock NeurIPS 2024. arXiv:2406.11944.
+
+\bibitem[Li et al.(2023)]{li2023iti}
+K.~Li, O.~Patel, F.~Vi\'egas, H.~Pfister, and M.~Wattenberg.
+\newblock Inference-time intervention: Eliciting truthful answers from a
+language model.
+\newblock NeurIPS 2023. arXiv:2306.03341.
+
+\bibitem[Orgad et al.(2025)]{orgad2024}
+H.~Orgad et al.
+\newblock LLMs know more than they show: On the intrinsic representation of
+LLM hallucinations.
+\newblock ICLR 2025. arXiv:2410.02707.
+
+\bibitem[Nanda(2022)]{nanda2022}
+N.~Nanda.
+\newblock Attribution patching: Activation patching at industrial scale.
+\newblock Technical report, 2022.
+
+\bibitem[Kram\'ar et al.(2024)]{kramar2024}
+J.~Kram\'ar, T.~Lieberum, R.~Shah, and N.~Nanda.
+\newblock AtP*: An efficient and scalable method for localizing LLM behaviour
+to components.
+\newblock arXiv:2403.00745.
+
+\bibitem[Zhang \& Nanda(2024)]{zhang2024}
+F.~Zhang and N.~Nanda.
+\newblock Towards best practices of activation patching in language models:
+Metrics and methods.
+\newblock ICLR 2024. arXiv:2309.16042.
+\end{thebibliography}
+
+\end{document}
