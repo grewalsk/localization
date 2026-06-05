@@ -27,6 +27,14 @@ dependencies = [
 
 [project.optional-dependencies]
 data = ["datasets>=2.19"]
+# CPU-only plumbing smoke (scripts/smoke_cpu.py, tests/test_cpu_smoke.py): a tiny
+# HF model (gpt2) with eager attention to prove the spine runs end-to-end on a
+# real transformer. NOT the science stack — that is `gpu` (TransformerLens/CUDA).
+# torch+transformers only; no TransformerLens/SAELens/CUDA needed.
+smoke = [
+  "torch>=2.1",
+  "transformers>=4.44",
+]
 gpu = [
   "torch>=2.1",
   "transformers>=4.44",       # Llama-3.1 support landed in 4.43; 4.44+ safer (§1.2)

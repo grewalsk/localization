@@ -67,7 +67,28 @@ def test_11_1e_build_instance_maps_gold_and_excludes_specials(chat_tokenizer):
     gold = inst.gold_spans[0]
     assert "4821" in gold.text
     assert all(inst.content_token_mask[i] for i in gold.token_indices)  # gold is content
-    assert int(inst.content_token_mask.sum()) < inst.n_tokens  # template specials excluded
+    n_content = int(inst.content_token_mask.sum())
+    assert n_content <= inst.n_tokens
+    # Template special tokens are excluded from the content mask. Whether any
+    # *exist* to exclude is tokenizer-dependent: the real Llama-3.1 instruct
+    # template emits true special tokens (zero-width offsets / special flags),
+    # but the CI stand-in `hf-internal-testing/llama-tokenizer` is the Llama-2
+    # `[INST]` template whose role tags are ordinary text -- nothing to drop, so
+    # equality is correct there. Enforce strict exclusion only when specials are
+    # actually present. (The specials-dropping logic itself is pinned, model-free,
+    # by test_11_1e_content_mask_excludes_zero_width_specials above.)
+    enc = chat_tokenizer(
+        inst.rendered_prompt,
+        return_offsets_mapping=True,
+        return_special_tokens_mask=True,
+        add_special_tokens=False,
+    )
+    has_template_specials = any(
+        a == b or bool(s)
+        for (a, b), s in zip(enc["offset_mapping"], enc["special_tokens_mask"], strict=False)
+    )
+    if has_template_specials:
+        assert n_content < inst.n_tokens  # specials excluded
 
 
 @pytest.mark.needs_model
