@@ -12,6 +12,7 @@ import pytest
 from lcv.contracts import Dataset
 from lcv.data import niah
 from lcv.data import tokenization as tok
+from lcv.signals import retrieval_qr
 
 # Pre-registered bar for 11.1a: fraction of the detected top-20 Wu heads that must
 # overlap the released Llama-3.1-8B set (§11.1a).
@@ -105,6 +106,75 @@ def test_11_1e_build_instance_rejects_unlocatable_gold(chat_tokenizer):
             answer_string="x",
             gold_texts=["this sentence is absent from the context"],
         )
+
+
+# --- CPU core: QRscore head detection (§5.3 / arXiv:2506.09944 Eq. 1-3) ----- #
+
+
+def test_qr_score_aggregates_query_to_gold_attention():
+    # head 0 attends to the gold key (3); head 1 attends elsewhere (0).
+    A = np.zeros((1, 2, 3, 4))
+    A[0, 0, :, 3] = [0.5, 0.5, 0.5]
+    A[0, 1, :, 0] = [0.9, 0.9, 0.9]
+    s = retrieval_qr.qr_score_from_patterns(A, query_positions=[0, 1, 2], gold_key_positions=[3])
+    assert s.shape == (1, 2)
+    assert s[0, 0] == pytest.approx(0.5)  # mean query->gold attention
+    assert s[0, 1] == pytest.approx(0.0)  # attends off-gold => no QRscore
+    assert s[0, 0] > s[0, 1]
+
+
+def test_qr_score_divides_by_query_length():
+    # |q|-normalization (Eq. 1): four query rows each pay 1.0 onto the gold key.
+    A = np.zeros((1, 1, 4, 2))
+    A[0, 0, :, 1] = 1.0
+    s = retrieval_qr.qr_score_from_patterns(A, query_positions=[0, 1, 2, 3], gold_key_positions=[1])
+    assert s[0, 0] == pytest.approx(1.0)
+
+
+def test_qr_score_guards():
+    A = np.zeros((1, 1, 2, 2))
+    with pytest.raises(ValueError, match="n_layers"):
+        retrieval_qr.qr_score_from_patterns(np.zeros((2, 2)), [0], [0])
+    with pytest.raises(ValueError, match="query token"):
+        retrieval_qr.qr_score_from_patterns(A, [], [0])
+    with pytest.raises(ValueError, match="gold"):
+        retrieval_qr.qr_score_from_patterns(A, [0], [])
+    with pytest.raises(ValueError, match="out of range"):
+        retrieval_qr.qr_score_from_patterns(A, [9], [0])
+
+
+def test_aggregate_qr_scores_means_over_examples():
+    # Eq. 3: average the per-example QRscore matrices over the detection set T.
+    agg = retrieval_qr.aggregate_qr_scores([np.array([[1.0, 0.0]]), np.array([[3.0, 2.0]])])
+    assert agg.tolist() == [[2.0, 1.0]]
+
+
+def test_aggregate_qr_scores_guard():
+    with pytest.raises(ValueError, match=">= 1 detection example"):
+        retrieval_qr.aggregate_qr_scores([])
+
+
+def test_qr_token_importance_projects_query_attention_to_tokens():
+    # content keys {1,2,3}; key 2 gets the most query attention, key 1 a little.
+    A = np.zeros((1, 1, 2, 4))
+    A[0, 0, :, 2] = [0.6, 0.4]
+    A[0, 0, :, 1] = [0.1, 0.1]
+    imp = retrieval_qr.qr_token_importance_from_patterns(
+        A, np.array([False, True, True, True]), query_positions=[0, 1], instance_id="x"
+    )
+    assert imp.method.value == "qr_attention"
+    assert imp.values.shape == (3,)
+    assert np.argmax(imp.values) == 1  # content index 1 == key position 2
+
+
+def test_qr_head_set_selects_top_heads_from_score():
+    from lcv.contracts import HeadScore, Method, RetrievalSource
+
+    hs = HeadScore(method=Method.QR_HEADS, scores=np.array([[0.1, 0.9], [0.5, 0.2]]))
+    rset = retrieval_qr.qr_head_set(hs, k=2)
+    assert rset.source == RetrievalSource.QRHEAD
+    assert rset.head_ids[0] == (0, 1)  # highest score
+    assert len(rset.head_ids) == 2
 
 
 # --- GPU gates ------------------------------------------------------------- #
