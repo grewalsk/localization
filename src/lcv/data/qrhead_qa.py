@@ -135,8 +135,7 @@ def build_longmemeval_instance(
     ex = parse_longmemeval_example(raw)
     if not ex["context"]:
         raise ValueError(
-            f"LongMemEval example {ex['id'] or '<?>'} has empty session context "
-            "(no haystack turns)"
+            f"LongMemEval example {ex['id'] or '<?>'} has empty session context (no haystack turns)"
         )
     if instance_id is not None:
         iid = instance_id
@@ -213,9 +212,7 @@ def load_longmemeval(
     for i in indices:
         raw = rows[i]
         try:
-            out.append(
-                build_longmemeval_instance(raw, instance_id=f"longmemeval_{split}_{i}")
-            )
+            out.append(build_longmemeval_instance(raw, instance_id=f"longmemeval_{split}_{i}"))
         except ValueError:
             if not skip_empty:
                 raise

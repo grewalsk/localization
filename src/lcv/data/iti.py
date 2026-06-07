@@ -49,9 +49,7 @@ ITI_QA_FORMAT = "Q: {question} A: {answer}"
 _VALID_TARGETS = ("mc1", "mc2")
 
 
-def parse_truthfulqa_mc_example(
-    raw: Mapping[str, Any], *, targets: str = "mc2"
-) -> dict[str, Any]:
+def parse_truthfulqa_mc_example(raw: Mapping[str, Any], *, targets: str = "mc2") -> dict[str, Any]:
     """Pull ``question`` + the chosen ``{targets}_targets`` out of one MC example.
 
     ``targets`` is ``"mc1"`` or ``"mc2"``. Raises ``ValueError`` (referencing §5.4)
@@ -71,9 +69,7 @@ def parse_truthfulqa_mc_example(
     if not choices:
         raise ValueError(f"{key} has no choices (§5.4 schema)")
     if len(choices) != len(labels):
-        raise ValueError(
-            f"{key} choices/labels length mismatch: {len(choices)} vs {len(labels)}"
-        )
+        raise ValueError(f"{key} choices/labels length mismatch: {len(choices)} vs {len(labels)}")
     return {
         "question": str(raw["question"]),
         "choices": [str(c) for c in choices],
