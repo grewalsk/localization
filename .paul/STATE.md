@@ -4,7 +4,7 @@
 A training-free, per-instance signal — cross-method disagreement `D(x)` — that flags which inputs an aggressive KV-compression method will break, grounded in a causal oracle so the result is more than "the tools are noisy."
 
 ## Current Focus
-CPU foundation complete. The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), NIAH data (§10), tokenization (§3.3/11.1e), and the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10) over a shared gold-mapping core — plus the §11 phase-gate suite (phase0–4) is implemented and green in CI (151 CPU tests pass). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. A separate **CPU-only smoke path** (`smoke` extra: gpt2 + HF eager attention) now runs the full pipeline spine end-to-end on a laptop; the accumulated-attention signal is factored into a backbone-portable core (`accumulated_attention_from_patterns`, tensor-in) shared by the CPU path and the future TL `hook_pattern` path, so a backbone/OOM swap rewrites one accessor, not the signals. Plumbing only — gpt2 has no localization ground truth, so passing means "the wiring runs", not "the method is right". CI stays torch-free and green (151 pass); `--extra smoke` exercises 161 (the 10 `needs_model` tests, incl. 7 new gpt2 smoke checks). Remaining science work is GPU-bound and waits on the rented H100.
+**CPU foundation COMPLETE — all 23 CPU/non-GPU tasks done, green, committed, pushed.** The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), masking-primary oracle (§8.1), NIAH data (§10), tokenization (§3.3/11.1e), the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10), the two probing/detection loaders (ITI/TruthfulQA §5.4, QRHead/LongMemEval §5.3), the faithful QRscore detector core (arXiv:2506.09944 Eq. 1-3, §5.3), the transcoder input-gradient + firing-position reductions (§4.4), and the §11.2a adjudication-subset fallback — all over shared backbone-portable cores (`*_from_patterns`, tensor-in) — plus the §11 phase-gate suite (phase0–4) is implemented and green (**217 CPU tests pass**, 5 download-gated skips, 12 GPU deselected). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. A separate **CPU-only smoke path** (`smoke` extra: gpt2 + HF eager attention) runs the full pipeline spine end-to-end on a laptop. Plumbing only — gpt2 has no localization ground truth, so passing means "the wiring runs", not "the method is right". Remaining science work is GPU-bound and waits on the rented H100.
 
 ## Milestone
 **M0 — Convergent-Validity Result** (v0.1.0) · status: in_progress
@@ -14,11 +14,26 @@ CPU foundation complete. The entire torch-free core — data contracts, agreemen
 
 ## Loop Position
 ```
-[CPU foundation built ✓] → [provision H100] → run GPU gates phase-by-phase
+[CPU foundation built ✓ — ALL CPU work done] → [provision H100 ← NEXT] → run GPU gates phase-by-phase
 ```
 PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
 
 ## Recently Completed
+- **Paper-revision CPU tasks 17–23 (all committed + pushed to origin/main):**
+  - `b51d760` — masking-primary oracle (`oracle/masking.py`, §8.1 Definition 2) +
+    transcoder input-gradient/firing-position reductions (§4.4) + §11.2a
+    adjudication-subset fallback (`ADJUDICATION_SUBSET_SIZE=150`).
+  - `a2caba5` — faithful QRscore head detection (`signals/retrieval_qr.py`,
+    arXiv:2506.09944 Eq. 1-3): question-tokens→gold-document-tokens attention, /|q|,
+    averaged over the detection set; backbone-portable `qr_score_from_patterns` core
+    + 7 CPU tests. Verified it is a real QRscore port, not hand-rolled (task 21/#3).
+  - `4c53d41` — ITI (`data/iti.py`, TruthfulQA §5.4) + QRHead (`data/qrhead_qa.py`,
+    LongMemEval §5.3) probing/detection loaders, pure `dict -> pairs/Instance` cores,
+    held out from the §10 QA eval sets; 15 CPU tests + 2 download-gated. Verified both
+    HF schemas live first (TruthfulQA mc1/mc2; LongMemEval cleaned repo, raw-JSON
+    because `answer` is sometimes scalar).
+  - `d3de2f1` — verified Llama-Scope checkpoint provenance (task 23/#7) + documented
+    the Wu-head gap (task 23/#4). See Blockers for the two findings.
 - SEED ideation → graduation (project brief + design docs in repo).
 - PAUL initialized: PROJECT.md, ROADMAP.md (Phase 0–4), STATE.md, paul.json.
 - **Full CPU foundation (12-task ledger, all committed + pushed to origin/main):**
@@ -65,6 +80,8 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
 - **TL-primary is a memory bet — run the 11.0b parity gate at FULL 4k context on the actual H100 BEFORE fanning out all six signal implementations against TL hooks.** TransformerLens is ergonomic but materializes a lot; at 4k context on an 8B model with attribution-patching gradients + caching it may OOM where the spec leaned toward nnsight-primary. The nnsight fallback + parity gate is the hedge. **Keep every signal backbone-portable** (read patterns/activations through a thin accessor, not TL-specific globals) so an OOM at 4k means swapping the backbone, not rewriting signals. If TL OOMs at 4k, learn it first (§13.1 checkpoint) while the signal code is still portable.
 - **Replication transcoders dropped on Gemma 2.** Gemma 2 has only the original Gemma Scope (SAE-only); no transcoder suite exists for it (transcoders are Gemma-3/Gemma Scope 2 only). On the `gemma-2-9b-it` rerun, do **not** attempt to load Gemma transcoders — the transcoder-based signals are omitted and reported as a finding (§13.6, gate 11.2c); RQ1–RQ3 replicate over the attention-based signals.
 - **Do NOT** `pip install nightdessert/Retrieval_Head` (pins transformers 4.37.2; can't load Llama-3.1) — port the Wu algorithm.
+- **Llama-Scope transcoders are NOT in the SAELens registry** (verified 2026-06-07 against `sae_lens/pretrained_saes.yaml`: only `llama_scope_lx{r,m,a}_{8,32}x` exist — R/M/A, zero TC entries). The transcoder `final.safetensors` DO exist on HF (`fnlp/Llama3_1-8B-Base-LXTC-{8,32}x` → canonical `OpenMOSS-Team/*`, per-layer `Llama3_1-8B-Base-L{n}TC-{8,32}x/checkpoints/final.safetensors`). So on the GPU: R/M load via `SAE.from_pretrained(release, sae_id)` (resolved by `sae_loader.llama_scope_sae_lens_release`); **TC must load DIRECTLY from the per-layer safetensors** (`sae_loader.llama_scope_checkpoint_ref` gives `(repo, subdir)`). `SAE.from_pretrained("llama_scope_lxtc_8x", …)` would miss the registry — a clean-but-wrong trap, now blocked by a CPU test (phase0).
+- **No Wu-released Llama-3.1-8B retrieval-head set exists** (verified 2026-06-07). Wu's `head_score/` ships only llama-2-7b-80k, llama-2-13b-64k, Mistral-7B-v0.2, Mixtral-8x7B, Qwen1.5-14B(-Chat), Yi-6B-200K — not Llama-3.1-8B (our PRIMARY_MODEL); the QRHead repo (`princeton-pli/QRHead`) ships QR-head sets for Llama-3.1-8B-Instruct but recomputes Wu/RetHead on the fly and stores no Wu list. So `PUBLISHED_WU_HEADS` stays `frozenset()` **by design, not omission** — do NOT fabricate it from a secondary source. To run gate 11.1a as a reproduce-published-numbers check, detect on a model Wu DID release: head score = mean of the per-example list, retrieval head iff ≥0.1; **llama-2-7b-80k yields 33 heads** (top 16-19, 11-15, 8-26). Wiring 11.1a to load llama-2-7b-80k is a GPU-phase design choice to confirm with the user.
 - Attention-reading passes must use **eager attention** (FlashAttention returns no weights).
 - **Attention-sink confound in accumulated-attention (§5.1), surfaced by the CPU smoke** (see `docs/notes/2026-06-05-cpu-smoke-gpt2.md`). On gpt2 the first content token absorbed **51.8%** of all content attention mass (raw 38.3 vs ≤1.18); the NIAH needle drew 5.2% and ranked at chance (AUROC 0.600, permutation p=0.20, indistinguishable from 0.5). gpt2 has no BOS, so the sink fell on a *content* token. On Llama-3.1 + chat template the sink mass should land on BOS/special tokens already dropped by the §3.3 content mask — **verify explicitly: after specials are excluded, does the sink jump to the first *content* token?** If yes, the accumulated-attention signal needs explicit sink exclusion (and/or rank-normalization before minmax, which a 38× outlier otherwise dominates). The smoke's job is exactly this: surface methodology issues cheaply, not validate numbers.
 - Leakage rule: `D(x)` is computed from the **full-cache pass only** — structurally isolated from the compressed run.
@@ -72,8 +89,8 @@ PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
 - **Dataset loaders are network-gated.** `load_{hotpotqa,longbench,triviaqa}` download via the `data` extra; the real-load tests only run under `LCV_RUN_DATA_DOWNLOADS=1`. `zai-org/LongBench` is script-based — it needs `trust_remote_code=True` (already passed by `load_longbench`). HF IDs are pinned as module constants (renamed from the originals; see addendum §10 errata) — do not revert to `hotpot_qa`/`THUDM/LongBench`/`trivia_qa`, they 404.
 
 ## Next Action
-Provision the SF Compute H100, install the `gpu` extra, and run the model-bound gates phase-by-phase (`pytest -m gpu`), starting with Phase 0 parity (11.0a/b/c/d). **Run 11.0b at the full 4k context length first** (not a short prompt) to settle the TL-vs-nnsight memory question before any signal fan-out; if TL OOMs at 4k, take the §13.1 nnsight checkpoint while the signal code is still portable. Before 11.1a, fill `PUBLISHED_WU_HEADS` in `tests/phase1.py` from the released Llama-3.1-8B `head_score` set.
+**All CPU work is green and pushed (origin/main @ `d3de2f1`); the gate to provision the H100 is satisfied.** Next: provision the SF Compute H100, install the `gpu` extra, and run the model-bound gates phase-by-phase (`pytest -m gpu`), starting with Phase 0 parity (11.0a/b/c/d). **Run 11.0b at the full 4k context length first** (not a short prompt) to settle the TL-vs-nnsight memory question before any signal fan-out; if TL OOMs at 4k, take the §13.1 nnsight checkpoint while the signal code is still portable. Gate 11.1a cannot use a Llama-3.1-8B Wu set (none released — see Blockers); enable it by detecting on a Wu-released model (llama-2-7b-80k, 33 heads at ≥0.1) — confirm this scope with the user first. (Provisioning spends real money and needs the user's SF Compute account, so it is a human-checkpoint handoff, not an autonomous step.)
 
 ---
 *STATE.md — the live cursor. Updated every loop step.*
-*Last updated: 2026-06-05*
+*Last updated: 2026-06-07*
