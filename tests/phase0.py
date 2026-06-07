@@ -91,6 +91,45 @@ def test_11_0c_bad_sae_names_raise():
         sae_loader.parse_sae_name("L99R-8x")  # layer > 31
 
 
+# --- CPU core: verified Llama-Scope provenance (gate 11.0c resolution) ------ #
+# Pins the checkpoint resolution verified against the HF API + the SAELens
+# pretrained_saes.yaml registry (2026-06-07), so the GPU phase cannot silently
+# load the wrong checkpoint or invent a nonexistent transcoder release.
+
+
+def test_11_0c_sae_lens_release_for_residual_and_mlp():
+    # R/M are registered with conversion_func "llama_scope"; id == l<layer><pos>_<exp>x.
+    assert sae_loader.llama_scope_sae_lens_release("L0R-8x") == ("llama_scope_lxr_8x", "l0r_8x")
+    assert sae_loader.llama_scope_sae_lens_release("L16M-32x") == (
+        "llama_scope_lxm_32x",
+        "l16m_32x",
+    )
+
+
+def test_11_0c_transcoder_absent_from_sae_lens_registry():
+    # Verified: SAELens registers R/M/A only -- no LXTC release. Transcoders must
+    # load directly, so resolving one as a SAELens release must fail loudly.
+    with pytest.raises(ValueError, match="no SAELens release|load directly"):
+        sae_loader.llama_scope_sae_lens_release("L8TC-8x")
+
+
+def test_11_0c_checkpoint_ref_templates_resolve():
+    # The transcoder direct-download path (per-layer final.safetensors lives here).
+    assert sae_loader.llama_scope_checkpoint_ref("L8TC-8x") == (
+        "fnlp/Llama3_1-8B-Base-LXTC-8x",
+        "Llama3_1-8B-Base-L8TC-8x",
+    )
+    assert sae_loader.llama_scope_checkpoint_ref("L0R-32x") == (
+        "fnlp/Llama3_1-8B-Base-LXR-32x",
+        "Llama3_1-8B-Base-L0R-32x",
+    )
+
+
+def test_11_0c_checkpoint_ref_rejects_lxa():
+    with pytest.raises(ValueError, match="attention-output"):
+        sae_loader.llama_scope_checkpoint_ref("L8A-8x")
+
+
 # --- GPU gates ------------------------------------------------------------- #
 
 

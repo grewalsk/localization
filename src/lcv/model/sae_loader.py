@@ -34,8 +34,33 @@ DEFAULT_EXPANSION = 8
 # Three depths ~25/50/65% of 32 layers (§4.3); a §13.3 human checkpoint.
 DEFAULT_TRANSCODER_LAYERS: tuple[int, ...] = (8, 16, 21)
 
-# Checkpoint homes (§4.1); confirm which SAELens resolves before relying on either.
-LLAMA_SCOPE_REPOS = ("fnlp/Llama-Scope", "OpenMOSS-Team/Llama-Scope")
+# --------------------------------------------------------------------------- #
+# Verified checkpoint provenance (HF API + SAELens registry, 2026-06-07)
+# --------------------------------------------------------------------------- #
+# Llama-Scope ships one HF repo per (position, expansion); the umbrella names
+# `fnlp/Llama-Scope` / `OpenMOSS-Team/Llama-Scope` are *not* the checkpoint repos.
+# The real per-position repos resolve (`fnlp/*` 307-redirects to the canonical
+# `OpenMOSS-Team/*`, identical content), each holding one subdirectory per layer:
+#   Llama3_1-8B-Base-L<layer><POS>-<exp>x/checkpoints/final.safetensors
+#                                        /hyperparams.json
+#                                        /lm_config.json
+LLAMA_SCOPE_REPOS = ("fnlp/Llama-Scope", "OpenMOSS-Team/Llama-Scope")  # umbrella, not loadable
+LLAMA_SCOPE_REPO_TEMPLATE = "fnlp/Llama3_1-8B-Base-LX{position}-{expansion}x"
+LLAMA_SCOPE_LAYER_SUBDIR_TEMPLATE = "Llama3_1-8B-Base-L{layer}{position}-{expansion}x"
+
+# SAELens registry status (`sae_lens/pretrained_saes.yaml`, conversion_func
+# "llama_scope"): only R and M positions are registered and load via
+# `SAE.from_pretrained(release, sae_id)`. The transcoder (TC) safetensors exist
+# on HF but are **absent from the SAELens registry** (verified: zero `*TC*`
+# entries), so TC must be loaded directly from the per-layer `final.safetensors`
+# -- `SAE.from_pretrained("llama_scope_lxtc_*", ...)` would miss the registry and
+# is a clean-but-wrong trap. (LXA is registered upstream but banned here, §4.2.)
+LLAMA_SCOPE_SAELENS_RELEASES: dict[tuple[str, int], str] = {
+    ("R", 8): "llama_scope_lxr_8x",
+    ("R", 32): "llama_scope_lxr_32x",
+    ("M", 8): "llama_scope_lxm_8x",
+    ("M", 32): "llama_scope_lxm_32x",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +98,43 @@ def parse_sae_name(name: str) -> SAEName:
     return SAEName(layer=layer, position=position, expansion=int(exp), n_features=_FEATURES[exp])
 
 
+def llama_scope_checkpoint_ref(name: str) -> tuple[str, str]:
+    """Return ``(repo_id, layer_subdir)`` for a Llama-Scope name (verified provenance).
+
+    The checkpoint is ``<repo_id>/<layer_subdir>/checkpoints/final.safetensors``.
+    This is the direct-download path the **transcoder** substrate must use (TC is
+    not in the SAELens registry; see :func:`llama_scope_sae_lens_release`); R/M may
+    use it too. Rejects ``LXA`` via :func:`parse_sae_name` (§4.2).
+    """
+    p = parse_sae_name(name)
+    repo = LLAMA_SCOPE_REPO_TEMPLATE.format(position=p.position, expansion=p.expansion)
+    subdir = LLAMA_SCOPE_LAYER_SUBDIR_TEMPLATE.format(
+        layer=p.layer, position=p.position, expansion=p.expansion
+    )
+    return repo, subdir
+
+
+def llama_scope_sae_lens_release(name: str) -> tuple[str, str]:
+    """Return the SAELens ``(release, sae_id)`` for an R/M Llama-Scope name.
+
+    Resolves the ``conversion_func: llama_scope`` registry entry so a GPU-phase
+    ``SAE.from_pretrained(release, sae_id)`` loads the right checkpoint. Raises
+    ``ValueError`` for transcoders (``TC``): they are **absent from the SAELens
+    registry** (verified 2026-06-07), so they cannot be resolved this way and must
+    be loaded from the per-layer ``final.safetensors`` via
+    :func:`llama_scope_checkpoint_ref`. Rejects ``LXA`` (§4.2).
+    """
+    p = parse_sae_name(name)
+    release = LLAMA_SCOPE_SAELENS_RELEASES.get((p.position, p.expansion))
+    if release is None:
+        raise ValueError(
+            f"{name!r}: position {p.position!r} has no SAELens release (registry has "
+            "R/M only; transcoders load directly via llama_scope_checkpoint_ref, §4.3)"
+        )
+    sae_id = f"l{p.layer}{p.position.lower()}_{p.expansion}x"
+    return release, sae_id
+
+
 def reconstruction_error(activations: np.ndarray, reconstruction: np.ndarray) -> float:
     """``1 - explained_variance`` of an SAE reconstruction (gate 11.0c).
 
@@ -95,11 +157,14 @@ def reconstruction_error(activations: np.ndarray, reconstruction: np.ndarray) ->
 def load_sae(name: str, *, device: str = "cuda", release: str | None = None) -> SAE:
     """Load an SAE/transcoder checkpoint by name at its hook point (§4.1, gate 11.0c).
 
-    Parses ``name`` (rejecting ``LXA`` via :func:`parse_sae_name`), resolves the
-    SAELens release/hook point (``fnlp/Llama-Scope`` vs ``OpenMOSS-Team`` per
-    §4.1), and loads onto ``device``. Gate 11.0c then verifies the checkpoint
-    loads at its named hook point with reconstruction error in range and the
-    expected JumpReLU/TopK L0; a failure means the wrong hook point or checkpoint.
+    Parses ``name`` (rejecting ``LXA`` via :func:`parse_sae_name`), then resolves
+    by position (verified 2026-06-07): **R/M** go through the SAELens registry via
+    :func:`llama_scope_sae_lens_release` (``SAE.from_pretrained(release, sae_id)``);
+    **transcoders (TC)** are not registered in SAELens and load directly from the
+    per-layer ``final.safetensors`` named by :func:`llama_scope_checkpoint_ref`.
+    Gate 11.0c then verifies the checkpoint loads at its named hook point with
+    reconstruction error in range and the expected JumpReLU/TopK L0; a failure
+    means the wrong hook point or checkpoint.
     """
     parse_sae_name(name)  # refuse LXA / malformed before touching the GPU
     raise NotImplementedError("requires GPU phase")

@@ -15,9 +15,22 @@ from lcv.data import tokenization as tok
 from lcv.signals import retrieval_qr
 
 # Pre-registered bar for 11.1a: fraction of the detected top-20 Wu heads that must
-# overlap the released Llama-3.1-8B set (§11.1a).
+# overlap the released reference set (§11.1a).
 WU_PUBLISHED_OVERLAP_MIN = 0.5
-# Fill from the released head_score reference to enable the 11.1a gate (§5.2/§11.1a).
+
+# Released Wu retrieval-head reference for gate 11.1a. EMPTY on purpose (verified
+# 2026-06-07): Wu et al. (github.com/nightdessert/Retrieval_Head, head_score/)
+# released scores for 7 models -- llama-2-7b-80k, llama-2-13b-64k, Mistral-7B-v0.2,
+# Mixtral-8x7B-v0.1, Qwen1.5-14B(-Chat), Yi-6B-200K -- but NOT Llama-3.1-8B (our
+# PRIMARY_MODEL), so an exact released Llama-3.1-8B Wu set does not exist. The
+# QRHead repo (github.com/princeton-pli/QRHead) ships QR-head sets for
+# Llama-3.1-8B-Instruct (configs/*_qr_head_LME.yaml, top-16) but recomputes
+# Wu/RetHead on the fly and stores no Wu list either. To run 11.1a as a
+# reproduce-published-numbers check, detect on a model Wu *did* release: each
+# head_score JSON is {"layer-head": [per-example scores]}, a retrieval head is
+# mean(score) >= 0.1 (Wu's threshold), and llama-2-7b-80k yields 33 such heads
+# (top: 16-19, 11-15, 8-26, ...). Do NOT transcribe a Llama-3.1-8B set from a
+# secondary source -- that fabricates the number this gate exists to check.
 PUBLISHED_WU_HEADS: frozenset[tuple[int, int]] = frozenset()
 
 # Synthetic offset mapping mimicking a fast tokenizer: specials are zero-width.
@@ -186,7 +199,10 @@ def test_11_1a_wu_reproduces_published_heads(backbone):
     from lcv.signals import retrieval_wu
 
     if not PUBLISHED_WU_HEADS:
-        pytest.skip("register the released Llama-3.1-8B Wu head set to enable 11.1a")
+        pytest.skip(
+            "no Wu-released Llama-3.1-8B head set exists (see PUBLISHED_WU_HEADS note); "
+            "enable 11.1a by detecting on a Wu-released model, e.g. llama-2-7b-80k"
+        )
     insts = niah.build_niah_dataset(depths=(0.1, 0.5, 0.9), haystack_sentences=(20,), seed=0)
     score = retrieval_wu.detect_wu_retrieval_heads(backbone, insts)
     detected = set(retrieval_wu.wu_retrieval_head_set(score, 20).head_ids)
