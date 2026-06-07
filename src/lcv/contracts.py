@@ -87,6 +87,7 @@ class Dataset(str, Enum):
     HOTPOTQA = "hotpotqa"
     LONGBENCH = "longbench"
     TRIVIAQA = "triviaqa"
+    LONGMEMEVAL = "longmemeval"  # QRHead detection set (§5.3); not a §10 eval set
 
 
 class RetrievalSource(str, Enum):
