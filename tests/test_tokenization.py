@@ -7,6 +7,8 @@ fuzzy match) be tested on CPU without a tokenizer; one real-tokenizer check is
 marked ``needs_model``.
 """
 
+import re
+
 import pytest
 
 from lcv.data import tokenization as tok
@@ -126,6 +128,87 @@ def test_locate_then_map_then_verify_end_to_end():
     assert span is not None
     idx = tok.char_span_to_token_indices(offsets, *span)
     assert tok.verify_gold_mapping(text, offsets, idx, "sat on") is True
+
+
+# --- content_mask_with_tokenizer: the §3.3 in-text-special trap (CPU) ------- #
+
+
+class _FakeFastTokenizer:
+    """Mimics a HF *fast* tokenizer on an already-rendered chat string fed with
+    ``add_special_tokens=False``.
+
+    This reproduces the §3.3 BLOCKER trap exactly: template special tokens appear
+    *in the text*, so they get **real, non-zero offsets** and an **all-zero**
+    ``special_tokens_mask`` (nothing was *added*). Their ids are still in
+    ``all_special_ids`` -- the only reliable signal, which the fix relies on. No
+    model download, so this pins the structural fix in CI.
+    """
+
+    _SPECIALS = ("<|begin_of_text|>", "<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>")
+    _TOKEN_RE = re.compile(r"<\|[a-z_]+\|>|\S+")
+
+    def __init__(self) -> None:
+        # specials get ids 1000+; words get small ids that never collide with them
+        self._special_id = {t: 1000 + i for i, t in enumerate(self._SPECIALS)}
+        self.all_special_ids = list(self._special_id.values())
+
+    def __call__(
+        self,
+        text,
+        *,
+        return_offsets_mapping=False,
+        return_special_tokens_mask=False,
+        add_special_tokens=True,
+        **_,
+    ):
+        ids: list[int] = []
+        offsets: list[tuple[int, int]] = []
+        for m in self._TOKEN_RE.finditer(text):
+            t = m.group()
+            offsets.append((m.start(), m.end()))
+            ids.append(self._special_id.get(t, (sum(map(ord, t)) % 900) + 1))
+        out = {"input_ids": ids}
+        if return_offsets_mapping:
+            out["offset_mapping"] = offsets
+        if return_special_tokens_mask:
+            # THE TRAP: add_special_tokens=False => nothing flagged, even though
+            # in-text specials are present.
+            out["special_tokens_mask"] = [0] * len(ids)
+        return out
+
+
+def test_content_mask_drops_intext_specials_by_id():
+    """B1: in-text specials (real offsets, all-zero flag) are dropped via id."""
+    tk = _FakeFastTokenizer()
+    rendered = (
+        "<|begin_of_text|><|start_header_id|>user<|end_header_id|> ctxword needle 4821 <|eot_id|>"
+    )
+    ids, offsets, mask = tok.content_mask_with_tokenizer(tk, rendered, add_special_tokens=False)
+    # every special-id token is masked out despite its real offset + zero flag
+    for i, tid in enumerate(ids.tolist()):
+        if tid in tk.all_special_ids:
+            assert not mask[i], "in-text special leaked into the content mask"
+    kept = [rendered[a:b] for i, (a, b) in enumerate(offsets) if mask[i]]
+    assert "needle" in kept and "4821" in kept
+    assert all(not t.startswith("<|") for t in kept), "special-token text in content"
+
+
+def test_content_mask_with_tokenizer_clips_to_char_range():
+    """M11: content_char_range additionally drops role words + the question."""
+    tk = _FakeFastTokenizer()
+    context = "ctxword needle 4821"
+    rendered = (
+        f"<|begin_of_text|><|start_header_id|>user<|end_header_id|> "
+        f"{context} question_sentinel <|eot_id|>"
+    )
+    lo = rendered.index(context)
+    _, offsets, mask = tok.content_mask_with_tokenizer(
+        tk, rendered, add_special_tokens=False, content_char_range=(lo, lo + len(context))
+    )
+    kept = [rendered[a:b] for i, (a, b) in enumerate(offsets) if mask[i]]
+    assert kept == ["ctxword", "needle", "4821"]
+    assert "user" not in kept  # role word dropped by the char range
+    assert "question_sentinel" not in kept  # question dropped by the char range
 
 
 # --- real tokenizer (needs model weights / transformers) ------------------- #

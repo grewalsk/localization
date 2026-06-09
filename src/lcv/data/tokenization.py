@@ -8,8 +8,16 @@ mapping and reuse it everywhere.
 
 The reusable machinery here is tokenizer-agnostic and torch-free — it consumes an
 ``offset_mapping`` (the ``(char_start, char_end)`` per token that any HF *fast*
-tokenizer returns) plus an optional ``special_tokens_mask``. Special tokens carry
-zero-width offsets ``(0, 0)``, so they drop out of the mask either way.
+tokenizer returns) plus an optional ``special_tokens_mask``. Tokens the tokenizer
+*adds* (a leading BOS) carry zero-width offsets ``(0, 0)`` and drop out cheaply,
+but the template special tokens that appear **in the text** (``<|eot_id|>``, header
+markers) get *real* offsets and an *all-zero* ``special_tokens_mask`` when the
+rendered prompt is re-tokenized with ``add_special_tokens=False`` — the §3.3 trap
+that silently leaks BOS/role/header tokens into the content set. Dropping those
+reliably needs the token *ids*, so the real-tokenizer bridge
+(:func:`content_mask_with_tokenizer`) detects specials by id
+(``tokenizer.all_special_ids``), not by offset, and clips to the context window via
+``content_char_range``.
 
 Gate 11.1e is exactly: map a gold span's characters to token indices, intersect
 with the content mask, decode, and fuzzy-match the decoding to the gold text at
@@ -181,13 +189,27 @@ def locate_text(haystack: str, needle: str) -> tuple[int, int] | None:
 
 
 def content_mask_with_tokenizer(
-    tokenizer, text: str, *, add_special_tokens: bool = True
+    tokenizer,
+    text: str,
+    *,
+    add_special_tokens: bool = True,
+    content_char_range: tuple[int, int] | None = None,
 ) -> tuple[np.ndarray, list[tuple[int, int]], np.ndarray]:
     """Tokenize ``text`` with a real (fast) tokenizer and build the content mask.
 
     Returns ``(input_ids, offset_mapping, content_mask)``. The tokenizer is passed
     in, so this module never imports transformers and stays CI-importable; the
     integration test that constructs a tokenizer is marked ``needs_model``.
+
+    When ``text`` is an already-rendered chat template fed with
+    ``add_special_tokens=False`` (the §3.3 deployment path), the template's special
+    tokens appear *in the text*: a fast tokenizer gives them real offsets and an
+    all-zero ``special_tokens_mask`` (nothing was *added*). Trusting either signal
+    alone leaves BOS / header markers / ``<|eot_id|>`` flagged as content -- the
+    BLOCKER this guards. So specials are also detected **structurally by id** via
+    ``tokenizer.all_special_ids`` (an id is special however it was produced). Pass
+    ``content_char_range`` to additionally clip content to the verbatim context
+    window, dropping role words, an injected system block, and the question (§3.3).
     """
     enc = tokenizer(
         text,
@@ -195,6 +217,16 @@ def content_mask_with_tokenizer(
         return_special_tokens_mask=True,
         add_special_tokens=add_special_tokens,
     )
+    input_ids = np.asarray(enc["input_ids"])
     offsets = [tuple(o) for o in enc["offset_mapping"]]
-    mask = content_mask_from_offsets(offsets, special_tokens_mask=enc["special_tokens_mask"])
-    return np.asarray(enc["input_ids"]), offsets, mask
+    # Union the tokenizer's special_tokens_mask with an id-based detection: any
+    # token whose id is in `all_special_ids` is special regardless of its offset or
+    # flag, which is the only reliable signal for in-text template specials.
+    special = np.asarray(enc["special_tokens_mask"], dtype=bool)
+    special_ids = getattr(tokenizer, "all_special_ids", None)
+    if special_ids:
+        special = special | np.isin(input_ids, np.asarray(special_ids))
+    mask = content_mask_from_offsets(
+        offsets, special_tokens_mask=special, content_char_range=content_char_range
+    )
+    return input_ids, offsets, mask

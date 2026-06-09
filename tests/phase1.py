@@ -67,11 +67,14 @@ def test_11_1e_build_instance_maps_gold_and_excludes_specials(chat_tokenizer):
     from lcv.model import chat_template
 
     context = "Alpha beta gamma. The magic number is 4821. Delta epsilon zeta."
+    # The question carries a sentinel word absent from the context, so a content
+    # mask that (wrongly) includes the question is detectable by decoding.
+    question = "Reply only with the zzqqsentinel marker."
     inst = chat_template.build_instance(
         chat_tokenizer,
         instance_id="g0",
         dataset=Dataset.NIAH,
-        question="What is the magic number?",
+        question=question,
         context=context,
         answer_string="4821",
         gold_texts=["The magic number is 4821."],
@@ -81,28 +84,59 @@ def test_11_1e_build_instance_maps_gold_and_excludes_specials(chat_tokenizer):
     gold = inst.gold_spans[0]
     assert "4821" in gold.text
     assert all(inst.content_token_mask[i] for i in gold.token_indices)  # gold is content
+
+    # The content mask must cover the context region ONLY (§3.3): the question, the
+    # role/header template, and any special tokens are excluded. This holds for any
+    # template because content is clipped to the verbatim context char range -- not
+    # left to depend on whether the tokenizer emits true specials. Decoding just the
+    # content tokens must contain the needle but neither the question sentinel nor
+    # the template markers.
     n_content = int(inst.content_token_mask.sum())
-    assert n_content <= inst.n_tokens
-    # Template special tokens are excluded from the content mask. Whether any
-    # *exist* to exclude is tokenizer-dependent: the real Llama-3.1 instruct
-    # template emits true special tokens (zero-width offsets / special flags),
-    # but the CI stand-in `hf-internal-testing/llama-tokenizer` is the Llama-2
-    # `[INST]` template whose role tags are ordinary text -- nothing to drop, so
-    # equality is correct there. Enforce strict exclusion only when specials are
-    # actually present. (The specials-dropping logic itself is pinned, model-free,
-    # by test_11_1e_content_mask_excludes_zero_width_specials above.)
-    enc = chat_tokenizer(
-        inst.rendered_prompt,
-        return_offsets_mapping=True,
-        return_special_tokens_mask=True,
-        add_special_tokens=False,
+    assert 0 < n_content < inst.n_tokens  # question + template were dropped
+    decoded = chat_tokenizer.decode(inst.context_tokens[inst.content_token_mask])
+    assert "4821" in decoded  # context kept
+    assert "zzqqsentinel" not in decoded  # question excluded (M11)
+    assert "[INST]" not in decoded  # role/template markers excluded
+
+
+@pytest.mark.needs_model
+def test_11_1e_chat_path_matches_cpu_content_text(chat_tokenizer):
+    """M11: the chat path (build_instance) and the CPU path (assemble_text_instance)
+    restrict content to the *same* context text -- no template/question leakage."""
+    from lcv.data.assembly import assemble_text_instance
+    from lcv.model import chat_template
+
+    context = "Alpha beta gamma. The magic number is 4821. Delta epsilon zeta."
+    question = "Reply only with the zzqqsentinel marker."
+
+    chat_inst = chat_template.build_instance(
+        chat_tokenizer,
+        instance_id="x0",
+        dataset=Dataset.NIAH,
+        question=question,
+        context=context,
+        answer_string="4821",
     )
-    has_template_specials = any(
-        a == b or bool(s)
-        for (a, b), s in zip(enc["offset_mapping"], enc["special_tokens_mask"], strict=False)
+    cpu_inst = assemble_text_instance(
+        instance_id="x0",
+        dataset=Dataset.NIAH,
+        context=context,
+        question=question,
+        answer_string="4821",
     )
-    if has_template_specials:
-        assert n_content < inst.n_tokens  # specials excluded
+
+    chat_content = chat_tokenizer.decode(chat_inst.context_tokens[chat_inst.content_token_mask])
+    _, spans = niah.word_tokenize(cpu_inst.rendered_prompt)
+    cpu_idx = tuple(int(i) for i in np.flatnonzero(cpu_inst.content_token_mask))
+    cpu_content = tok.reconstruct_span_text(cpu_inst.rendered_prompt, spans, cpu_idx)
+
+    # both keep the needle, neither leaks the question sentinel
+    for content in (chat_content, cpu_content):
+        assert "4821" in content
+        assert "zzqqsentinel" not in content
+    # and they agree on the context text (whitespace-normalized)
+    sim = tok.similarity_ratio(" ".join(chat_content.split()), " ".join(cpu_content.split()))
+    assert sim >= 0.9
 
 
 @pytest.mark.needs_model

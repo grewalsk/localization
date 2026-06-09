@@ -37,9 +37,11 @@ def render_chat(
     """Render the deployment-realistic prompt via ``apply_chat_template`` (§3.3).
 
     The user turn is ``f"{context}\\n\\n{question}"`` (context first, mirroring the
-    NIAH renderer). Returns the rendered *string* (``tokenize=False``) so the
-    content mask can be built from a single offset-mapped re-tokenization, which
-    keeps char offsets authoritative across the template.
+    NIAH renderer). Returns the rendered *string* (``tokenize=False``); the content
+    mask is then built from a single offset-mapped re-tokenization, with template
+    specials dropped by id and content clipped to the verbatim context window
+    (:func:`content_token_mask`) so role tags, an injected system block, and the
+    question never enter the content set (§3.3).
     """
     messages: list[dict[str, str]] = []
     if system_prompt is not None:
@@ -51,17 +53,28 @@ def render_chat(
 
 
 def content_token_mask(
-    tokenizer: PreTrainedTokenizerBase, rendered_prompt: str
+    tokenizer: PreTrainedTokenizerBase,
+    rendered_prompt: str,
+    *,
+    content_char_range: tuple[int, int] | None = None,
 ) -> tuple[np.ndarray, list[tuple[int, int]], np.ndarray]:
     """``(input_ids, offset_mapping, content_mask)`` for a rendered prompt (gate 11.1e).
 
-    The rendered prompt already contains the template's special-token *text*, so
-    we re-tokenize with ``add_special_tokens=False`` to avoid prepending a second
-    BOS. Fast tokenizers still map those special tokens to zero-width ``(0, 0)``
-    offsets, so :func:`lcv.data.tokenization.content_mask_from_offsets` drops them
-    and the mask covers content tokens only.
+    The rendered prompt already contains the template's special-token *text*, so we
+    re-tokenize with ``add_special_tokens=False`` to avoid prepending a second BOS.
+    Those in-text specials get *real* offsets and an all-zero ``special_tokens_mask``
+    (the §3.3 trap), so they are dropped **structurally by id** inside
+    :func:`lcv.data.tokenization.content_mask_with_tokenizer` -- not by trusting
+    their offsets. ``content_char_range`` additionally clips the mask to the verbatim
+    context window so role tags and the question are excluded (the canonical fix:
+    without it the 51.8% first-token attention sink lands on template tokens).
     """
-    return tok.content_mask_with_tokenizer(tokenizer, rendered_prompt, add_special_tokens=False)
+    return tok.content_mask_with_tokenizer(
+        tokenizer,
+        rendered_prompt,
+        add_special_tokens=False,
+        content_char_range=content_char_range,
+    )
 
 
 def build_instance(
@@ -79,6 +92,15 @@ def build_instance(
 ) -> Instance:
     """Render, mask, and map gold spans into a validated :class:`Instance` (gate 11.1e).
 
+    Content tokens are restricted to the **context** region of the rendered prompt
+    (§3.3): the verbatim ``context`` substring is located in the rendered string and
+    its char span becomes the ``content_char_range``, so role tags, an injected
+    system block, and the appended question are excluded -- matching the CPU builders
+    (:func:`lcv.data.assembly.assemble_text_instance`, :mod:`lcv.data.niah`). This is
+    the chat-path half of the canonical content-mask fix; without it every
+    token-substrate signal, the oracle sweep, and D(x) are computed over template
+    tokens.
+
     For each gold sentence: locate it in the rendered prompt (exact, else
     whitespace-tolerant), map its char span to token indices intersected with the
     content mask, and verify the decoding fuzzy-matches the gold text at
@@ -87,7 +109,13 @@ def build_instance(
     producing an off-by-one span.
     """
     rendered = render_chat(tokenizer, question, context, system_prompt=system_prompt)
-    input_ids, offsets, mask = content_token_mask(tokenizer, rendered)
+    ctx_span = tok.locate_text(rendered, context)
+    if ctx_span is None:
+        raise ValueError(
+            "context substring not found in rendered prompt; cannot restrict content "
+            "tokens to the context region (§3.3)"
+        )
+    input_ids, offsets, mask = content_token_mask(tokenizer, rendered, content_char_range=ctx_span)
 
     gold_spans: list[GoldSpan] = []
     for gold_text in gold_texts:
