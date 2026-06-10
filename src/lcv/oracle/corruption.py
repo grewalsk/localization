@@ -1,19 +1,21 @@
-"""Robustness corruption + patching reference (addendum §8.2).
+"""Robustness corruption for the oracle-ranking stability check (addendum §8.2).
 
 **The primary oracle is token masking** (Definition 2, §8.1, :mod:`lcv.oracle.
-masking`). Token-swap plays two *secondary* roles: (i) the oracle-ranking
+masking`), and the attribution-patching estimator linearizes that masking
+directly (§8.3, :mod:`lcv.oracle.attr_patching`) -- it needs **no** corrupted
+reference (M9). Token-swap's one *secondary* role is the oracle-ranking
 robustness check (gate 11.2b: re-derive the ranking under a swap and report its
-overlap with the masking ranking), and (ii) the *corrupted reference* the
-attribution-patching estimator (§8.3) needs to form the activation delta. The
-choice of corruption is load-bearing: Zhang & Nanda show Gaussian-noise corruption
-is fragile and hyperparameter-sensitive, so it is **forbidden** here.
+overlap with the masking ranking). The choice of corruption is load-bearing:
+Zhang & Nanda show Gaussian-noise corruption is fragile and
+hyperparameter-sensitive, so it is **forbidden** here.
 
 * **Token-swap (primary corruption).** Replace the gold span / needle with a
   different plausible span so the answer is no longer supported. Length-preserving,
-  so the corrupted run stays token-aligned with the clean run (required to subtract
-  activations position-by-position). Note the swap perturbs neighboring positions'
-  residual streams through their attention to the swapped token, which masking does
-  not -- one reason masking, not swap, is the primary oracle (§8.2).
+  so the corrupted run stays token-aligned with the clean run (so its content-token
+  ranking lines up with the clean ranking for the gate 11.2b overlap). Note the
+  swap perturbs neighboring positions' residual streams through their attention to
+  the swapped token, which masking does not -- one reason masking, not swap, is the
+  primary oracle (§8.2).
 * **Document-swap (coarser).** Replace the supporting document with a distractor;
   used for the multi-hop sets.
 
@@ -58,7 +60,7 @@ def assert_not_gaussian(corruption: CorruptionType | str) -> CorruptionType:
 
 @dataclass(slots=True, frozen=True)
 class Corruption:
-    """A corrupted token sequence plus provenance for a patching reference."""
+    """A corrupted token sequence plus provenance for the robustness check (gate 11.2b)."""
 
     tokens: np.ndarray  # corrupted token ids (1-D)
     corruption_type: CorruptionType

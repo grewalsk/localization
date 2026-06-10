@@ -76,7 +76,7 @@ Component-substrate methods produce a per-instance (or global) score over heads 
 For RQ2 and to separate noise from plurality, we compute a per-instance causal effect for each token and head.
 
 - **Effect.** E(t) is the drop in the answer log-probability when token *t*'s key/value is **masked** from attention at every layer (Definition 2; the primary oracle, **[Update 2026-06-05]** superseding the earlier "ablated or patched" framing — masking is read as an upper-bound proxy for eviction's per-token loss, not the identical operation). The analogue for heads is the change under head ablation. Symmetric token-swap is a robustness check on the ranking, not the primary oracle.
-- **Scaling.** Per-token masking across long contexts is linear in context length and infeasible at scale, so we use attribution patching (Syed et al., 2023) for the full sweep and verify it against true masking on a 5 to 10 percent subsample, reporting the **Spearman** rank correlation between the linear estimate and the true effect (ranking, not magnitude, is what every downstream use needs; gate 11.2a requires Spearman ≥ 0.8, else the pinned 150-instance exact-masking fallback).
+- **Scaling.** Per-token masking across long contexts is linear in context length and infeasible at scale, so we use attribution patching (Nanda 2022; AtP*, Kramár et al. 2024) for the full sweep — the **attention-pattern** form that linearizes the masking intervention directly (**[Update 2026-06-05]** superseding the mean-ablation form, which linearized a different intervention than masking) — and verify it against true masking on a 5 to 10 percent subsample, reporting the **Spearman** rank correlation between the linear estimate and the true effect (ranking, not magnitude, is what every downstream use needs; gate 11.2a requires Spearman ≥ 0.8, else the pinned 150-instance exact-masking fallback).
 - **Method-versus-oracle fidelity.** Per instance, correlate each method's importance with E. High individual fidelity plus low mutual agreement is the strong plural-localization finding; the activation-patching best-practices result forces us to fix and report the patching configuration (corruption type, metric, granularity) and to show robustness to it, otherwise the oracle is as arbitrary as the methods it judges.
 
 ### 5.6 The deployment payoff
@@ -143,7 +143,7 @@ The harness and oracle built here are the substrate for several follow-on projec
 - Mueller et al., MIB: A Mechanistic Interpretability Benchmark, ICLR 2025, arXiv:2504.13151.
 - BlackboxNLP 2025 Shared Task, arXiv:2511.18409.
 - Zhang and Nanda, Towards Best Practices of Activation Patching, ICLR 2024, arXiv:2309.16042.
-- Syed et al., Attribution Patching Outperforms Automated Circuit Discovery, 2023.
+- Nanda, Attribution Patching: Activation Patching at Industrial Scale, 2022; Kramár et al., AtP*: An Efficient and Scalable Method for Localizing LLM Behaviour to Components, 2024, arXiv:2403.00745.
 - Counting ViTs: Causality is not Decodability, arXiv:2510.09794.
 - Krishna et al., The Disagreement Problem in Explainable Machine Learning, 2022; Kamp et al., arXiv:2310.05619.
 - Wu et al., Retrieval Head Mechanistically Explains Long-Context Factuality, ICLR 2025, arXiv:2404.15574.

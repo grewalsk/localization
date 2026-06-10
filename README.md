@@ -189,4 +189,4 @@ Re-run Phase 0–3 on `gemma-2-9b-it` + the **original Gemma Scope** (SAE-only).
 
 ## References
 
-Hase et al. 2301.04213 · Kantamneni et al. 2502.16681 · MIB 2504.13151 · Wu retrieval heads 2404.15574 · QRHead 2506.09944 · H2O 2306.14048 · SnapKV · ITI 2306.03341 · Orgad et al. 2410.02707 · Llama Scope 2410.20526 · Zhang & Nanda 2309.16042 · Syed et al. attribution patching.
+Hase et al. 2301.04213 · Kantamneni et al. 2502.16681 · MIB 2504.13151 · Wu retrieval heads 2404.15574 · QRHead 2506.09944 · H2O 2306.14048 · SnapKV · ITI 2306.03341 · Orgad et al. 2410.02707 · Llama Scope 2410.20526 · Zhang & Nanda 2309.16042 · Nanda 2022 / Kramár et al. AtP* 2403.00745.

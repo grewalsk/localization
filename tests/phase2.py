@@ -159,6 +159,73 @@ def test_decide_oracle_path_subset_size_guard():
         adjudication.decide_oracle_path(0.9, subset_size=0)
 
 
+# --- CPU core: M8 seeded, reproducible adjudication subset ------------------ #
+
+
+def test_select_adjudication_subset_is_seeded_sorted_unique():
+    a = adjudication.select_adjudication_subset(1000, subset_size=150, seed=0)
+    b = adjudication.select_adjudication_subset(1000, subset_size=150, seed=0)
+    assert a.shape == (150,)
+    assert np.array_equal(a, b)  # same seed -> identical subset (reproducible)
+    assert np.array_equal(a, np.sort(a))  # sorted ascending
+    assert len(np.unique(a)) == 150  # without replacement
+    assert a.min() >= 0 and a.max() < 1000
+
+
+def test_select_adjudication_subset_caps_at_n():
+    # fewer instances than the subset size -> take them all (no oversampling)
+    idx = adjudication.select_adjudication_subset(40, subset_size=150)
+    assert np.array_equal(idx, np.arange(40))
+
+
+def test_select_adjudication_subset_different_seed_differs():
+    a = adjudication.select_adjudication_subset(1000, subset_size=150, seed=0)
+    c = adjudication.select_adjudication_subset(1000, subset_size=150, seed=1)
+    assert not np.array_equal(a, c)  # a different seed draws a different subset
+
+
+def test_select_adjudication_subset_guards():
+    with pytest.raises(ValueError, match="n_instances"):
+        adjudication.select_adjudication_subset(0)
+    with pytest.raises(ValueError, match="subset_size"):
+        adjudication.select_adjudication_subset(100, subset_size=0)
+
+
+def test_decide_oracle_path_records_seeded_subset_on_fallback():
+    plan = adjudication.decide_oracle_path(0.5, n_instances=1000)
+    assert plan.use_attribution_patching is False
+    assert plan.adjudication_seed == adjudication.ADJUDICATION_SEED
+    assert plan.adjudication_indices is not None
+    assert len(plan.adjudication_indices) == 150
+    # the recorded indices match an independent seeded draw (reproducible)
+    expected = adjudication.select_adjudication_subset(1000, seed=adjudication.ADJUDICATION_SEED)
+    assert plan.adjudication_indices == tuple(int(i) for i in expected)
+
+
+def test_decide_oracle_path_patching_path_records_no_subset():
+    # above the gate: full E_hat sweep, no adjudication subset to record
+    plan = adjudication.decide_oracle_path(0.9, n_instances=1000)
+    assert plan.use_attribution_patching is True
+    assert plan.adjudication_indices is None
+    assert plan.adjudication_seed is None
+
+
+def test_decide_oracle_path_force_exact_records_subset():
+    plan = adjudication.decide_oracle_path(0.99, force_exact=True, n_instances=500, seed=7)
+    assert plan.use_attribution_patching is False
+    assert plan.adjudication_seed == 7
+    assert plan.adjudication_indices is not None
+    assert len(plan.adjudication_indices) == 150
+
+
+def test_decide_oracle_path_fallback_without_n_instances_leaves_indices_none():
+    # back-compat: callers that don't pass n_instances still get a valid plan
+    plan = adjudication.decide_oracle_path(0.5)
+    assert plan.use_attribution_patching is False
+    assert plan.adjudication_indices is None
+    assert plan.adjudication_seed is None
+
+
 # --- CPU core: transcoder feature->token reductions (§2.1 / 11.2c) --------- #
 
 

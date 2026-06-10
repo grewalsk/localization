@@ -64,14 +64,15 @@ class CompressionMethod(str, Enum):
 
 
 class CorruptionType(str, Enum):
-    """Robustness corruption + attribution-patching reference (§8.2). Never Gaussian.
+    """Robustness corruption for the oracle-ranking stability check (§8.2). Never Gaussian.
 
-    The primary oracle is token masking (Definition 2, §8.1); these corruptions are
-    secondary: the oracle-ranking robustness check (gate 11.2b) and the corrupted
-    reference for the ``E_hat`` estimator (§8.3).
+    The primary oracle is token masking (Definition 2, §8.1) and the ``E_hat``
+    estimator linearizes that masking directly -- no corrupted reference (§8.3, M9).
+    These corruptions are secondary: gate 11.2b re-derives the oracle ranking under
+    a corruption and reports its overlap with the masking ranking.
     """
 
-    TOKEN_SWAP = "token_swap"  # primary corruption (robustness / AP reference)
+    TOKEN_SWAP = "token_swap"  # primary corruption (robustness gate 11.2b)
     DOCUMENT_SWAP = "document_swap"  # coarser, for multi-hop
 
 
