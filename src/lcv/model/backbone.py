@@ -13,6 +13,7 @@ hints only) and the package stays CPU-importable. Each call raises
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # hints only; never imported at runtime on the CPU path
@@ -89,5 +90,31 @@ def eager_attention_patterns(model: HookedTransformer, tokens: torch.Tensor) -> 
     heads, §3.2). The gate checks that shape and that every attention row sums to
     1.0 within fp tolerance: a ``None`` means FlashAttention slipped in, a bad row
     sum means a softmax-axis error.
+
+    **Short contexts / the shape gate only.** The full stacked tensor is 68.7 GB
+    fp32 at 4K context (137 GB upcast to fp64), so it materializes only for the
+    11.0d shape check and small smoke prompts. The 4K+ signal extraction MUST stream
+    per layer via :func:`stream_eager_attention_patterns` +
+    :func:`lcv.signals.attention_hh.accumulate_query_key_sums` (M6).
+    """
+    raise NotImplementedError("requires GPU phase")
+
+
+def stream_eager_attention_patterns(
+    model: HookedTransformer, tokens: torch.Tensor
+) -> Iterator[torch.Tensor]:
+    """Yield eager attention **one layer at a time**: ``[batch, 32, q, k]`` per layer (M6).
+
+    Memory-bounded counterpart to :func:`eager_attention_patterns`: the full
+    ``[batch, n_layers, 32, q, k]`` tensor OOMs at 4K context, so the GPU phase runs
+    the model with a ``hook_pattern`` hook that copies each layer's pattern to CPU
+    and yields it (freeing the GPU activation before the next layer). Downstream the
+    per-layer slices fold straight into the ``[L, H, k]`` query-sum
+    (:func:`lcv.signals.attention_hh.accumulate_query_key_sums`) or the ``[L, H]``
+    QRscore (:func:`lcv.signals.retrieval_qr.qr_score_from_layer_stream`), so the
+    whole-tensor result is reproduced without ever holding all 32 layers at once.
+
+    Yields layers in order ``0 .. n_layers-1``; each tensor is the same per-layer
+    slice gate 11.0d validates (32 query heads, rows summing to 1).
     """
     raise NotImplementedError("requires GPU phase")

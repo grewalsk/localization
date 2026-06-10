@@ -35,7 +35,7 @@ the GPU. Read **eager** attention (FlashAttention exposes no weights).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -48,6 +48,7 @@ from ..contracts import (
     RetrievalHeadSet,
     RetrievalSource,
 )
+from .attention_hh import summed_attention_per_key
 from .normalization import normalize_importance
 from .retrieval_wu import DEFAULT_TOP_K
 
@@ -100,6 +101,46 @@ def qr_score_from_patterns(
     return sel.sum(axis=(2, 3)) / qpos.size  # [L, H]
 
 
+def qr_score_from_layer_stream(
+    layer_patterns: Iterable[np.ndarray],
+    query_positions: Sequence[int],
+    gold_key_positions: Sequence[int],
+) -> np.ndarray:
+    """Streaming ``QRscore_h(q)`` from per-layer ``[n_heads, q, k]`` patterns (Eq. 1-2; M6).
+
+    Memory-bounded analogue of :func:`qr_score_from_patterns`: the GPU backend
+    yields one ``[n_heads, q, k]`` layer at a time (the full ``[L, H, q, k]`` tensor
+    OOMs at 4K context), and this folds each layer to its ``[n_heads]`` per-head
+    score immediately, holding only the growing ``[L, H]`` matrix plus the current
+    layer. Each layer contributes
+    ``(1/|q|) * sum_{t_q in q} sum_{t_d in D*} A_h^{t_q -> t_d}`` summed in fp64, so
+    the result equals :func:`qr_score_from_patterns` on the stacked tensor *exactly*.
+    Returns the ``[n_layers, n_heads]`` score for this single ``(q, D*)`` example;
+    average over the detection set ``T`` with :func:`aggregate_qr_scores` (Eq. 3).
+    """
+    qpos = np.asarray(list(query_positions), dtype=int)
+    gpos = np.asarray(list(gold_key_positions), dtype=int)
+    if qpos.size == 0:
+        raise ValueError("need >= 1 query token (|q| > 0)")
+    if gpos.size == 0:
+        raise ValueError("need >= 1 gold-document key token")
+    rows: list[np.ndarray] = []
+    for layer_idx, layer in enumerate(layer_patterns):
+        la = np.asarray(layer)
+        if la.ndim != 3:
+            raise ValueError(f"layer {layer_idx} pattern must be [n_heads, q, k], got {la.shape}")
+        n_q, n_k = la.shape[1], la.shape[2]
+        if np.any((qpos < 0) | (qpos >= n_q)):
+            raise ValueError(f"query position out of range [0, {n_q})")
+        if np.any((gpos < 0) | (gpos >= n_k)):
+            raise ValueError(f"gold key position out of range [0, {n_k})")
+        sel = la[:, qpos][:, :, gpos]  # [H, |q|, |gold|]
+        rows.append(sel.sum(axis=(1, 2), dtype=np.float64) / qpos.size)  # [H]
+    if not rows:
+        raise ValueError("layer_patterns is empty; need >= 1 layer")
+    return np.stack(rows, axis=0)  # [L, H]
+
+
 def aggregate_qr_scores(per_example_scores: Sequence[np.ndarray]) -> np.ndarray:
     """Average per-example QRscore matrices over the detection set ``T`` (Eq. 3, §3.2).
 
@@ -123,6 +164,7 @@ def qr_token_importance_from_patterns(
     instance_id: str,
     layers: Sequence[int] | None = None,
     heads: Sequence[int] | None = None,
+    head_pairs: Sequence[tuple[int, int]] | None = None,
     normalization: str = "minmax",
 ) -> ImportanceVector:
     """Project the selected QRHead set onto content tokens (§6), the QR_ATTENTION member.
@@ -134,11 +176,16 @@ def qr_token_importance_from_patterns(
     retrieval candidate being ranked. Same attention family as accumulated
     attention, so the load-bearing comparison is attention vs transcoder vs oracle,
     not Wu vs QR (§5.1, §6).
+
+    Pass ``head_pairs`` (the QRHead set's ``head_ids``) to project an exact
+    ``(layer, head)`` set: the QR head set is non-rectangular, so selecting it via
+    ``layers`` x ``heads`` would average in the Cartesian product's out-of-set heads
+    (M5). ``head_pairs`` is mutually exclusive with ``layers`` / ``heads``.
     """
     a = np.asarray(attentions, dtype=float)
     if a.ndim != 4:
         raise ValueError(f"attentions must be [n_layers, n_heads, q, k], got {a.shape}")
-    n_layers, n_heads, n_q, n_k = a.shape
+    _n_layers, _n_heads, n_q, n_k = a.shape
     mask = np.asarray(content_mask, dtype=bool)
     if mask.shape[0] != n_k:
         raise ValueError(f"content_mask length {mask.shape[0]} != key positions {n_k}")
@@ -147,10 +194,13 @@ def qr_token_importance_from_patterns(
         raise ValueError("need >= 1 query token (|q| > 0)")
     if np.any((qpos < 0) | (qpos >= n_q)):
         raise ValueError(f"query position out of range [0, {n_q})")
-    lyr = np.arange(n_layers) if layers is None else np.asarray(list(layers), dtype=int)
-    hd = np.arange(n_heads) if heads is None else np.asarray(list(heads), dtype=int)
-    sel = a[lyr][:, hd][:, :, qpos, :]  # [L, H, |q|, k]
-    per_key = sel.sum(axis=2).mean(axis=(0, 1)) / qpos.size  # [k]
+    # sum over query, mean over the exact head set, then the |q| normalization (Eq. 1)
+    per_key = (
+        summed_attention_per_key(
+            a, query_positions=qpos, layers=layers, heads=heads, head_pairs=head_pairs
+        )
+        / qpos.size
+    )
     values = normalize_importance(per_key[mask], normalization)
     return ImportanceVector(
         instance_id=instance_id,
@@ -207,8 +257,9 @@ def qr_token_attention(
 
     GPU phase: extract eager attention for ``instance``, then call
     :func:`qr_token_importance_from_patterns` with the question tokens as the query
-    region and ``head_set`` as the selected ``(layer, head)`` set. Like the Wu
-    projection it is attention-family, so the load-bearing comparison is attention
-    vs transcoder vs oracle, not Wu vs QR (§5.1, §6).
+    region and ``head_pairs=head_set.head_ids`` as the selected ``(layer, head)``
+    set (exact selection, not a Cartesian product, M5). Like the Wu projection it is
+    attention-family, so the load-bearing comparison is attention vs transcoder vs
+    oracle, not Wu vs QR (§5.1, §6).
     """
     raise NotImplementedError("requires GPU phase")

@@ -214,6 +214,141 @@ def test_qr_token_importance_projects_query_attention_to_tokens():
     assert np.argmax(imp.values) == 1  # content index 1 == key position 2
 
 
+# --- CPU core: exact head-pair selection (M5; non-rectangular head sets) ---- #
+
+
+def test_summed_attention_per_key_pairs_exclude_out_of_set_heads():
+    """A non-rectangular head set selected by ``head_pairs`` ignores the off-set
+    heads a ``layers`` x ``heads`` Cartesian product would wrongly average in (M5)."""
+    from lcv.signals.attention_hh import summed_attention_per_key
+
+    # 4 layers x 4 heads, q=2, k=3. In-set heads (0,0)->key0 and (3,3)->key2;
+    # off-set heads (0,3) and (3,0) (present only in the Cartesian) -> key1.
+    a = np.zeros((4, 4, 2, 3))
+    a[0, 0, :, 0] = 1.0
+    a[3, 3, :, 2] = 1.0
+    a[0, 3, :, 1] = 1.0
+    a[3, 0, :, 1] = 1.0
+
+    pairs = summed_attention_per_key(a, query_positions=[0, 1], head_pairs=[(0, 0), (3, 3)])
+    assert pairs.tolist() == [1.0, 0.0, 1.0]  # off-set key1 gets nothing
+
+    cart = summed_attention_per_key(a, query_positions=[0, 1], layers=[0, 3], heads=[0, 3])
+    assert cart[1] > 0.0  # the Cartesian product leaks off-set heads into key1
+
+
+def test_summed_attention_per_key_guards():
+    from lcv.signals.attention_hh import summed_attention_per_key
+
+    a = np.zeros((2, 2, 1, 2))
+    with pytest.raises(ValueError, match="head_pairs OR layers/heads"):
+        summed_attention_per_key(a, head_pairs=[(0, 0)], layers=[0])
+    with pytest.raises(ValueError, match="out of range"):
+        summed_attention_per_key(a, head_pairs=[(0, 9)])
+
+
+def test_qr_token_importance_routes_exact_head_pairs():
+    """qr_token_importance projects an exact QR head set via ``head_pairs`` (M5)."""
+    a = np.zeros((2, 2, 1, 3))
+    a[0, 0, :, 0] = 1.0  # in-set head -> key0
+    a[1, 1, :, 2] = 1.0  # in-set head -> key2
+    a[0, 1, :, 1] = 1.0  # off-set head -> key1
+    imp = retrieval_qr.qr_token_importance_from_patterns(
+        a,
+        np.array([True, True, True]),
+        query_positions=[0],
+        instance_id="x",
+        head_pairs=[(0, 0), (1, 1)],
+    )
+    assert imp.values[1] < imp.values[0]  # off-set head excluded
+    assert imp.values[1] < imp.values[2]
+
+
+def test_accumulated_attention_routes_exact_head_pairs():
+    """Wu/accumulated projection of an exact head set excludes off-set heads (M5)."""
+    from lcv.signals.attention_hh import accumulated_attention_from_patterns
+
+    a = np.zeros((2, 2, 1, 3))
+    a[0, 0, :, 0] = 1.0
+    a[1, 1, :, 2] = 1.0
+    a[0, 1, :, 1] = 1.0  # off-set head -> key1
+    imp = accumulated_attention_from_patterns(
+        a, np.array([True, True, True]), instance_id="x", head_pairs=[(0, 0), (1, 1)]
+    )
+    assert imp.values[1] == 0.0  # off-set head contributes nothing
+
+
+# --- CPU core: per-layer streaming == whole-tensor (M6; 4K-OOM avoidance) -- #
+
+
+def test_accumulate_query_key_sums_matches_full_tensor():
+    """Streaming the per-layer query-sum then selecting heads reproduces the
+    whole-tensor ``summed_attention_per_key`` exactly, for every selection mode (M6)."""
+    from lcv.signals.attention_hh import (
+        accumulate_query_key_sums,
+        select_head_mean,
+        summed_attention_per_key,
+    )
+
+    rng = np.random.default_rng(0)
+    a = rng.random((4, 3, 5, 6))  # [L, H, q, k]
+    layer_stream = [a[layer] for layer in range(a.shape[0])]
+
+    for qpos in (None, [0, 2, 4]):
+        reduced = accumulate_query_key_sums(layer_stream, query_positions=qpos)
+        assert reduced.shape == (4, 3, 6)  # [L, H, k]
+        # default all-head mean
+        np.testing.assert_allclose(
+            select_head_mean(reduced), summed_attention_per_key(a, query_positions=qpos)
+        )
+        # exact non-rectangular pair set
+        pairs = [(0, 0), (3, 2), (1, 1)]
+        np.testing.assert_allclose(
+            select_head_mean(reduced, head_pairs=pairs),
+            summed_attention_per_key(a, query_positions=qpos, head_pairs=pairs),
+        )
+        # rectangular layers x heads
+        np.testing.assert_allclose(
+            select_head_mean(reduced, layers=[0, 3], heads=[0, 2]),
+            summed_attention_per_key(a, query_positions=qpos, layers=[0, 3], heads=[0, 2]),
+        )
+
+
+def test_qr_score_from_layer_stream_matches_full_tensor():
+    """Streaming QRscore per layer reproduces ``qr_score_from_patterns`` exactly (M6)."""
+    rng = np.random.default_rng(1)
+    a = rng.random((4, 3, 5, 6))  # [L, H, q, k]
+    layer_stream = [a[layer] for layer in range(a.shape[0])]
+    qpos, gpos = [0, 1, 4], [2, 5]
+    streamed = retrieval_qr.qr_score_from_layer_stream(layer_stream, qpos, gpos)
+    full = retrieval_qr.qr_score_from_patterns(a, qpos, gpos)
+    assert streamed.shape == (4, 3)  # [L, H]
+    np.testing.assert_allclose(streamed, full)
+
+
+def test_accumulate_query_key_sums_guards():
+    from lcv.signals.attention_hh import accumulate_query_key_sums
+
+    with pytest.raises(ValueError, match="empty"):
+        accumulate_query_key_sums([])
+    with pytest.raises(ValueError, match="must be"):
+        accumulate_query_key_sums([np.zeros((3, 5))])  # 2-D, not [n_heads, q, k]
+
+
+def test_qr_score_from_layer_stream_guards():
+    a_layer = np.zeros((3, 5, 6))  # [n_heads, q, k]
+    with pytest.raises(ValueError, match="query token"):
+        retrieval_qr.qr_score_from_layer_stream([a_layer], [], [0])
+    with pytest.raises(ValueError, match="gold-document"):
+        retrieval_qr.qr_score_from_layer_stream([a_layer], [0], [])
+    with pytest.raises(ValueError, match="empty"):
+        retrieval_qr.qr_score_from_layer_stream([], [0], [0])
+    with pytest.raises(ValueError, match="must be"):
+        retrieval_qr.qr_score_from_layer_stream([np.zeros((3, 5))], [0], [0])
+    with pytest.raises(ValueError, match="out of range"):
+        retrieval_qr.qr_score_from_layer_stream([a_layer], [9], [0])
+
+
 def test_qr_head_set_selects_top_heads_from_score():
     from lcv.contracts import HeadScore, Method, RetrievalSource
 

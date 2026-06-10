@@ -71,5 +71,12 @@ def wu_token_attention(
     giving the token-attribution-substrate vector (distinct from the component
     WU_HEADS score). Shares the attention family with accumulated attention and
     QRHead, so their mutual agreement is partly mechanical (§5.1, §6).
+
+    GPU phase: extract eager attention for ``instance``, then call
+    :func:`lcv.signals.attention_hh.accumulated_attention_from_patterns` with
+    ``head_pairs=head_set.head_ids`` and ``method=Method.WU_ATTENTION``. Routing the
+    head set through ``head_pairs`` selects the exact ``(layer, head)`` pairs; the Wu
+    set is non-rectangular, so a ``layers`` x ``heads`` projection would average in
+    out-of-set heads (M5).
     """
     raise NotImplementedError("requires GPU phase")
