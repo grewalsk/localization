@@ -93,6 +93,18 @@ def test_top_k_jaccard():
     assert ag.top_k_jaccard([1, 0, 0, 0], [0, 0, 0, 1], 1) == pytest.approx(0.0)
 
 
+def test_top_k_jaccard_nan_on_constant():
+    # A constant vector has no top-k set (argsort tie-break is arbitrary): the
+    # overlap must be undefined, never a spurious 1.0 (M2).
+    varied = np.array([0.1, 0.9, 0.2, 0.8, 0.3])
+    const = np.ones(5)
+    assert np.isnan(ag.top_k_jaccard(const, varied, 2))
+    assert np.isnan(ag.top_k_jaccard(varied, const, 2))
+    assert np.isnan(ag.top_k_jaccard(const, const, 2))
+    # the all-zero oracle effect (every key evicted) is constant too -> undefined
+    assert np.isnan(ag.top_k_jaccard(np.zeros(5), np.zeros(5), 3))
+
+
 def test_rbo_identical_disjoint_and_validation():
     assert ag.rbo([0, 1, 2, 3], [0, 1, 2, 3]) == pytest.approx(1.0)
     assert ag.rbo([0, 1, 2, 3], [4, 5, 6, 7]) == pytest.approx(0.0)
@@ -111,6 +123,14 @@ def test_rbo_from_importance_ranks_then_compares():
     assert ag.rbo_from_importance(a, a) == pytest.approx(1.0)
 
 
+def test_rbo_from_importance_nan_on_constant():
+    const = np.full(4, 0.5)
+    varied = np.array([0.1, 0.2, 0.9, 0.8])
+    assert np.isnan(ag.rbo_from_importance(const, varied))  # no spurious 1.0 (M2)
+    assert np.isnan(ag.rbo_from_importance(varied, const))
+    assert np.isnan(ag.rbo_from_importance(const, const))
+
+
 # --- Gold-span agreement --------------------------------------------------- #
 
 
@@ -119,6 +139,15 @@ def test_precision_at_k():
     gold = [1, 0, 1, 0]
     assert ag.precision_at_k(values, gold, 2) == pytest.approx(1.0)
     assert ag.precision_at_k(values, gold, 4) == pytest.approx(0.5)
+
+
+def test_precision_at_k_nan_on_constant_importance():
+    gold = [1, 0, 1, 0]
+    # constant importance -> arbitrary top-k -> precision undefined, not lucky (M2)
+    assert np.isnan(ag.precision_at_k(np.ones(4), gold, 2))
+    assert np.isnan(ag.precision_at_k(np.zeros(4), gold, 2))
+    # a single token has no tie ambiguity -> still defined
+    assert ag.precision_at_k([0.9], [1], 1) == pytest.approx(1.0)
 
 
 def test_auroc_vs_gold():
@@ -157,3 +186,38 @@ def test_benjamini_hochberg():
     assert bool(reject[-1]) is False
     assert np.all((q >= 0) & (q <= 1))
     assert ag.benjamini_hochberg([])[0].size == 0
+
+
+def test_permutation_test_nan_when_all_vectors_constant():
+    # every pair undefined -> observed mean agreement is NaN; the test must refuse
+    # to report the spurious p = 1/(n_perm+1) that `null >= NaN` would yield (M3).
+    res = ag.permutation_test([np.ones(10), np.full(10, 3.0)], n_perm=50, seed=0)
+    assert np.isnan(res.observed)
+    assert np.isnan(res.p_value)
+    assert res.null.shape == (50,)
+    assert np.all(np.isnan(res.null))
+
+
+def test_benjamini_hochberg_carries_nan_through():
+    # NaN p-values (undefined tests, M3) are excluded from the correction and
+    # returned as not-rejected with NaN q -- they neither reject nor dilute the rest.
+    p = [0.001, np.nan, 0.04, np.nan, 0.5]
+    reject, q = ag.benjamini_hochberg(p, alpha=0.05)
+    assert reject.shape == (5,)
+    assert not reject[1] and not reject[3]
+    assert np.isnan(q[1]) and np.isnan(q[3])
+    assert bool(reject[0]) is True
+    assert np.isfinite(q[0]) and np.isfinite(q[2]) and np.isfinite(q[4])
+    # all-NaN input -> nothing rejected, every q NaN (no crash)
+    rej2, q2 = ag.benjamini_hochberg([np.nan, np.nan])
+    assert not rej2.any() and np.all(np.isnan(q2))
+
+
+def test_benjamini_yekutieli_is_more_conservative_under_dependence():
+    # BY scales BH q-values by the harmonic factor c(m) = sum_i 1/i > 1, so under
+    # dependence it never rejects more and inflates the small q-values (M4).
+    p = [0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205]
+    _, q_bh = ag.benjamini_hochberg(p, dependent=False)
+    _, q_by = ag.benjamini_hochberg(p, dependent=True)
+    assert np.all(q_by >= q_bh - 1e-12)
+    assert np.any(q_by > q_bh + 1e-9)

@@ -94,6 +94,8 @@ def test_d_signal_beats_confounds_and_is_significant():
     report = fm.fit_flip_model(_dataset(mode="d"), seed=0)
     assert report.n == 400
     assert 0.0 < report.base_flip_rate < 1.0
+    assert report.degenerate_d is False  # real spread -> D(x) is modelled (M1)
+    assert report.d_variance > 0.0
     assert report.auroc_d_only > 0.7
     assert report.auroc_full > report.auroc_confound_only
     assert report.incremental_auroc > 0.1
@@ -160,5 +162,54 @@ def test_fit_flip_model_degenerate_single_class_is_nan_not_crash():
     )
     report = fm.fit_flip_model(ds)
     assert report.base_flip_rate == 0.0
+    assert np.isnan(report.auroc_d_only)
+    assert np.isnan(report.incremental_auroc)
+
+
+# --- M1: degenerate D(x) short-circuit ------------------------------------- #
+
+
+def test_fit_flip_model_flags_constant_d_as_degenerate():
+    # D(x) identical across instances carries no signal; fitting flip ~ D(x) would
+    # regress on float noise. Flag it and NaN the D-metrics, but still report the
+    # confound-only AUROC (which never touches D) as the baseline (M1).
+    rng = np.random.default_rng(0)
+    n = 200
+    length = rng.uniform(-1.0, 1.0, n)
+    confounds = np.column_stack([length, rng.uniform(0, 1, n), rng.uniform(0, 3, n)])
+    flip = (rng.uniform(0, 1, n) < 1 / (1 + np.exp(-(-0.3 + 2.5 * length)))).astype(int)
+    ds = fm.FlipDataset(
+        flip=flip,
+        disagreement=np.full(n, 0.7),  # constant -> zero variance
+        confounds=confounds,
+        instance_ids=tuple(f"i{i}" for i in range(n)),
+    )
+    report = fm.fit_flip_model(ds)
+    assert report.degenerate_d is True
+    assert report.d_variance == pytest.approx(0.0)
+    assert not np.isnan(report.auroc_confound_only)  # baseline stands
+    assert np.isnan(report.auroc_d_only)
+    assert np.isnan(report.auroc_full)
+    assert np.isnan(report.incremental_auroc)
+    assert np.isnan(report.lr_pvalue)
+    assert np.isnan(report.brier)
+    assert report.calibration_curve[0].size == 0
+
+
+def test_fit_flip_model_treats_nan_d_as_degenerate_without_crashing():
+    # A single undefined D(x) entry would otherwise crash the sklearn pipeline;
+    # route it through the same degenerate short-circuit (M1).
+    rng = np.random.default_rng(1)
+    n = 120
+    d = rng.uniform(0, 2, n)
+    d[5] = np.nan
+    ds = fm.FlipDataset(
+        flip=(rng.uniform(0, 1, n) < 0.3).astype(int),
+        disagreement=d,
+        confounds=rng.normal(size=(n, 3)),
+        instance_ids=tuple(f"i{i}" for i in range(n)),
+    )
+    report = fm.fit_flip_model(ds)
+    assert report.degenerate_d is True
     assert np.isnan(report.auroc_d_only)
     assert np.isnan(report.incremental_auroc)

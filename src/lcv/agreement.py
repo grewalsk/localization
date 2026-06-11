@@ -7,7 +7,8 @@ Per substrate, per instance, over the relevant ranking vectors:
 * gold-span agreement (precision@k, AUROC vs gold membership),
 * the per-instance disagreement score ``D(x) = 1 - mean pairwise Spearman``,
 * a permutation test for above-chance cross-method agreement,
-* Benjamini-Hochberg FDR over the reported p-values.
+* Benjamini-Hochberg FDR over the reported p-values (Benjamini-Yekutieli fallback
+  when the per-instance tests violate positive dependence).
 
 Pure numpy/scipy/sklearn/statsmodels — no GPU, no torch. Token rankings share
 the content-token set, so RBO is the equal-length extrapolated variant
@@ -41,6 +42,17 @@ Vector = Sequence[float] | np.ndarray
 
 def _is_constant(a: np.ndarray) -> bool:
     return bool(np.all(a == a.flat[0]))
+
+
+def _rank_undefined(a: np.ndarray) -> bool:
+    """True when a top-k / RBO ranking over ``a`` is undefined.
+
+    A constant vector of 2+ elements has no rank information: ``argsort`` breaks the
+    universal tie arbitrarily, so any top-k set, RBO, or precision@k derived from it
+    is a coin flip dressed as a number (M2). Single/empty inputs carry no tie
+    ambiguity and are left to the callers' own empty-set guards.
+    """
+    return a.size >= 2 and _is_constant(a)
 
 
 def spearman(a: Vector, b: Vector) -> float:
@@ -181,7 +193,15 @@ def top_k_set(values: Vector, k: int) -> set[int]:
 
 
 def top_k_jaccard(a: Vector, b: Vector, k: int) -> float:
-    """Jaccard overlap of the top-k index sets. NaN if both empty."""
+    """Jaccard overlap of the top-k index sets.
+
+    NaN if both empty, or if either vector is constant -- its top-k set is an
+    arbitrary argsort tie-break, so any overlap is spurious (M2).
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if _rank_undefined(a) or _rank_undefined(b):
+        return float("nan")
     sa, sb = top_k_set(a, k), top_k_set(b, k)
     if not sa and not sb:
         return float("nan")
@@ -219,6 +239,12 @@ def rbo(ranking_a: Sequence[int], ranking_b: Sequence[int], p: float = 0.9) -> f
 
 
 def rbo_from_importance(a: Vector, b: Vector, p: float = 0.9) -> float:
+    """Rank both vectors by importance, then RBO. NaN if either is constant --
+    the ranking is an arbitrary tie-break, so RBO would be spurious (M2)."""
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if _rank_undefined(a) or _rank_undefined(b):
+        return float("nan")
     return rbo(_ranking(a), _ranking(b), p=p)
 
 
@@ -228,8 +254,15 @@ def rbo_from_importance(a: Vector, b: Vector, p: float = 0.9) -> float:
 
 
 def precision_at_k(values: Vector, gold_mask: Vector, k: int) -> float:
-    """Fraction of the top-k importance tokens that are gold-span members."""
+    """Fraction of the top-k importance tokens that are gold-span members.
+
+    NaN if the importance vector is constant -- its top-k set is an arbitrary
+    argsort tie-break, so precision against the gold span would be spurious (M2).
+    """
+    values = np.asarray(values, dtype=float)
     gold = np.asarray(gold_mask, dtype=bool)
+    if _rank_undefined(values):
+        return float("nan")
     topk = top_k_set(values, k)
     if not topk:
         return float("nan")
@@ -258,7 +291,15 @@ class PermutationResult:
 
 def _mean_pairwise(vectors: Sequence[np.ndarray]) -> float:
     m = len(vectors)
-    rs = [spearman(vectors[i], vectors[j]) for i in range(m) for j in range(i + 1, m)]
+    rs = np.asarray(
+        [spearman(vectors[i], vectors[j]) for i in range(m) for j in range(i + 1, m)],
+        dtype=float,
+    )
+    # Every pair undefined (e.g. all vectors constant) -> the mean agreement is
+    # undefined. Return NaN explicitly rather than letting np.nanmean warn on an
+    # all-NaN slice; permutation_test reads this NaN to refuse a spurious p-value.
+    if rs.size == 0 or np.all(np.isnan(rs)):
+        return float("nan")
     return float(np.nanmean(rs))
 
 
@@ -268,13 +309,20 @@ def permutation_test(
     """Test whether mean pairwise agreement exceeds chance by shuffling token
     positions within each vector independently (§7).
 
-    p = (1 + #{null >= observed}) / (n_perm + 1).
+    p = (1 + #{null >= observed}) / (n_perm + 1). If the observed mean pairwise
+    agreement is undefined (every pair constant -> NaN), the test is undefined: we
+    return ``p_value=NaN`` and an all-NaN null rather than a spurious
+    ``1/(n_perm+1)`` that ``null >= NaN`` (all False) would otherwise manufacture (M3).
     """
     m = len(vectors)
     if m < 2:
         raise ValueError("need >= 2 vectors")
     vecs = [np.asarray(v, dtype=float) for v in vectors]
     observed = _mean_pairwise(vecs)
+    if np.isnan(observed):
+        return PermutationResult(
+            observed=float("nan"), p_value=float("nan"), null=np.full(n_perm, np.nan)
+        )
     rng = np.random.default_rng(seed)
     null = np.empty(n_perm)
     for t in range(n_perm):
@@ -285,11 +333,31 @@ def permutation_test(
 
 
 def benjamini_hochberg(
-    pvalues: Sequence[float], *, alpha: float = 0.05
+    pvalues: Sequence[float], *, alpha: float = 0.05, dependent: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Benjamini-Hochberg FDR control. Returns ``(reject, qvalues)`` (§7)."""
+    """FDR control over the reported p-values. Returns ``(reject, qvalues)`` (§7).
+
+    ``dependent=False`` runs Benjamini-Hochberg (assumes positive dependence);
+    ``dependent=True`` runs the Benjamini-Yekutieli procedure (``fdr_by``), the
+    conservative fallback valid under arbitrary dependence -- use it when the
+    per-instance tests violate the positive-dependence assumption (M4).
+
+    NaN p-values (tests that were undefined, e.g. a permutation test on all-constant
+    vectors -- M3) are carried through as *not rejected* with NaN q-value and are
+    excluded from the correction, so an undefined test neither rejects nor inflates
+    the denominator of the finite tests' FDR. ``multipletests`` would otherwise raise
+    or silently propagate NaN across every q-value.
+    """
     p = np.asarray(pvalues, dtype=float)
     if p.size == 0:
         return np.array([], dtype=bool), np.array([], dtype=float)
-    reject, qvalues, _, _ = multipletests(p, alpha=alpha, method="fdr_bh")
+    method = "fdr_by" if dependent else "fdr_bh"
+    reject = np.zeros(p.size, dtype=bool)
+    qvalues = np.full(p.size, np.nan)
+    finite = ~np.isnan(p)
+    if not finite.any():
+        return reject, qvalues
+    rej, q, _, _ = multipletests(p[finite], alpha=alpha, method=method)
+    reject[finite] = rej
+    qvalues[finite] = q
     return reject, qvalues

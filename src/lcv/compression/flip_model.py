@@ -43,6 +43,11 @@ from statsmodels.tools.sm_exceptions import PerfectSeparationError
 
 from ..contracts import Confounds, DisagreementScore, FlipRecord
 
+# Below this across-instance variance, D(x) carries no rank information for the
+# flip model: every instance has ~the same disagreement, so ``flip ~ D(x)`` would
+# regress on floating-point noise. Treated as degenerate (M1).
+_D_VARIANCE_TOL = 1e-12
+
 # --------------------------------------------------------------------------- #
 # Assembled modelling matrix
 # --------------------------------------------------------------------------- #
@@ -209,6 +214,8 @@ class FlipModelReport:
     n: int
     n_flips: int
     base_flip_rate: float
+    d_variance: float  # across-instance variance of D(x)
+    degenerate_d: bool  # True -> D(x) carried no signal; its metrics are NaN (M1)
     auroc_confound_only: float
     auroc_d_only: float
     auroc_full: float
@@ -227,17 +234,56 @@ def fit_flip_model(
 
     The headline is :attr:`incremental_auroc` (does ``D(x)`` beat the confounds?)
     and :attr:`lr_pvalue` (is the ``D(x)`` term significant?).
+
+    **Degenerate D(x) (M1).** If ``D(x)`` is constant across instances (variance
+    below ``_D_VARIANCE_TOL``) or has any undefined (NaN) entry, it carries no usable
+    signal -- fitting ``flip ~ D(x)`` would regress on floating-point noise (spurious
+    increment) or crash the sklearn pipeline. In that case :attr:`degenerate_d` is set
+    and every D-dependent metric is NaN, while :attr:`auroc_confound_only` -- which
+    never touches ``D(x)`` -- is still reported so the confound baseline stands.
     """
     y = dataset.flip.astype(int)
-    D = dataset.disagreement.reshape(-1, 1)
+    d_flat = dataset.disagreement.astype(float)
     C = dataset.confounds
+
+    finite = np.isfinite(d_flat)
+    d_variance = float(np.nanvar(d_flat)) if finite.any() else float("nan")
+    degenerate_d = (
+        int(finite.sum()) < 2
+        or not finite.all()
+        or not np.isfinite(d_variance)
+        or d_variance <= _D_VARIANCE_TOL
+    )
+
+    # The confound-only model never reads D(x); it stays valid even when D(x) is
+    # degenerate, and is the reference the headline increment is measured against.
+    p_conf = cv_oof_proba(C, y, n_splits=n_splits, seed=seed)
+    auroc_conf = _auroc(y, p_conf)
+
+    if degenerate_d:
+        return FlipModelReport(
+            n=dataset.n,
+            n_flips=dataset.n_flips,
+            base_flip_rate=dataset.base_flip_rate,
+            d_variance=d_variance,
+            degenerate_d=True,
+            auroc_confound_only=auroc_conf,
+            auroc_d_only=float("nan"),
+            auroc_full=float("nan"),
+            incremental_auroc=float("nan"),
+            lr_stat=float("nan"),
+            lr_df=0,
+            lr_pvalue=float("nan"),
+            brier=float("nan"),
+            calibration_curve=(np.array([]), np.array([])),
+        )
+
+    D = d_flat.reshape(-1, 1)
     X_full = np.hstack([D, C])
 
-    p_conf = cv_oof_proba(C, y, n_splits=n_splits, seed=seed)
     p_d = cv_oof_proba(D, y, n_splits=n_splits, seed=seed)
     p_full = cv_oof_proba(X_full, y, n_splits=n_splits, seed=seed)
 
-    auroc_conf = _auroc(y, p_conf)
     auroc_d = _auroc(y, p_d)
     auroc_full = _auroc(y, p_full)
     incremental = (
@@ -253,6 +299,8 @@ def fit_flip_model(
         n=dataset.n,
         n_flips=dataset.n_flips,
         base_flip_rate=dataset.base_flip_rate,
+        d_variance=d_variance,
+        degenerate_d=False,
         auroc_confound_only=auroc_conf,
         auroc_d_only=auroc_d,
         auroc_full=auroc_full,
