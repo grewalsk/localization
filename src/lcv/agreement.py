@@ -182,8 +182,13 @@ def aggregate_spearman(
 
 
 def _ranking(values: Vector) -> list[int]:
-    """Item indices ordered by descending importance (stable)."""
-    return np.argsort(np.asarray(values, dtype=float), kind="stable")[::-1].tolist()
+    """Item indices ordered by descending importance, ties broken by ascending index.
+
+    ``argsort(-v, kind="stable")`` is deterministic *and* convention-consistent: equal
+    scores keep their original (lowest-index-first) order. A plain ``argsort(v)[::-1]``
+    would instead reverse ties into highest-index-first, so two callers ranking the same
+    partially-tied vector could disagree on which item lands in the top-k (M1)."""
+    return np.argsort(-np.asarray(values, dtype=float), kind="stable").tolist()
 
 
 def top_k_set(values: Vector, k: int) -> set[int]:

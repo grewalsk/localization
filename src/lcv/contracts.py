@@ -257,9 +257,14 @@ class HeadScore:
         return Substrate.COMPONENT
 
     def top_k_heads(self, k: int) -> list[tuple[int, int]]:
-        """Return the top-k ``(layer, head)`` pairs by score, descending."""
+        """Return the top-k ``(layer, head)`` pairs by score, descending.
+
+        Ties break by ascending flat index (lower layer, then lower head) via a stable
+        sort of the negated scores, so the head set fed into the Wu-vs-QR Jaccard is
+        deterministic; ``argsort(scores)[::-1]`` would reverse ties unstably (M1).
+        """
         n_heads = self.scores.shape[1]
-        flat_order = np.argsort(self.scores, axis=None)[::-1][:k]
+        flat_order = np.argsort(-self.scores, axis=None, kind="stable")[:k]
         return [(int(i // n_heads), int(i % n_heads)) for i in flat_order]
 
 

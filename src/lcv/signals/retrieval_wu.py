@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from ..contracts import HeadScore, ImportanceVector, Instance, RetrievalHeadSet
+from ..contracts import HeadScore, ImportanceVector, Instance, RetrievalHeadSet, RetrievalSource
 
 if TYPE_CHECKING:  # hints only
     from transformer_lens import HookedTransformer
@@ -54,8 +54,17 @@ def detect_wu_retrieval_heads(
 
 
 def wu_retrieval_head_set(score: HeadScore, k: int = DEFAULT_TOP_K) -> RetrievalHeadSet:
-    """Top-``k`` Wu heads as a :class:`RetrievalHeadSet` (the Wu-vs-QR Jaccard input)."""
-    raise NotImplementedError("requires GPU phase")
+    """Top-``k`` Wu heads as a :class:`RetrievalHeadSet` (pure-CPU; the Wu-vs-QR Jaccard input).
+
+    Ranks the detection :class:`HeadScore` and wraps the top ``k`` ``(layer, head)``
+    pairs. Pure-CPU like :func:`lcv.signals.retrieval_qr.qr_head_set`: it only needs the
+    already-computed component-substrate score, so the Wu-vs-QR overlap (gate 11.1a) is
+    testable without the model. The stable tie-break in
+    :meth:`~lcv.contracts.HeadScore.top_k_heads` keeps the selected set deterministic (M1).
+    """
+    pairs = score.top_k_heads(k)
+    scores = {(layer, head): float(score.scores[layer, head]) for (layer, head) in pairs}
+    return RetrievalHeadSet(source=RetrievalSource.WU, head_ids=tuple(pairs), scores=scores)
 
 
 def wu_token_attention(

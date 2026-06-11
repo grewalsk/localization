@@ -144,6 +144,18 @@ def test_build_component_bundle_rejects_empty():
         sub.build_component_bundle([])
 
 
+def test_build_component_bundle_rejects_mixed_instances():
+    # a per-instance score bundled with a global (None) one would silently inherit
+    # scores[0]'s id and mislabel D(x); require a single shared id (M4).
+    s1 = HeadScore(Method.WU_HEADS, np.zeros((2, 2)), instance_id="i0")
+    s2 = HeadScore(Method.QR_HEADS, np.zeros((2, 2)), instance_id="i1")
+    with pytest.raises(ValueError, match="multiple instances"):
+        sub.build_component_bundle([s1, s2])
+    s3 = HeadScore(Method.QR_HEADS, np.zeros((2, 2)))  # instance_id None
+    with pytest.raises(ValueError, match="multiple instances"):
+        sub.build_component_bundle([s1, s3])
+
+
 def test_component_bundle_without_instance_refuses_disagreement_score():
     # global head sets (instance_id None) have no per-instance D(x)
     s1 = HeadScore(Method.WU_HEADS, np.array([[0.1, 0.9], [0.2, 0.8]]))

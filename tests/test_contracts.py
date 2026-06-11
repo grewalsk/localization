@@ -60,6 +60,13 @@ def test_head_score_rejects_wrong_substrate_and_top_k():
     assert hs.top_k_heads(2) == [(1, 0), (0, 1)]
 
 
+def test_top_k_heads_breaks_ties_by_ascending_flat_index():
+    # heads (0,1) and (1,0) tie at 0.5; the stable order keeps the lower flat index
+    # first, so the set is deterministic: (0,1) before (1,0) (M1).
+    hs = HeadScore(Method.WU_HEADS, np.array([[0.1, 0.5], [0.5, 0.2]]))
+    assert hs.top_k_heads(2) == [(0, 1), (1, 0)]
+
+
 def test_instance_mask_must_match_tokens():
     with pytest.raises(ValueError, match="content_token_mask"):
         Instance(

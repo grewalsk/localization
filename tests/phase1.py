@@ -359,6 +359,20 @@ def test_qr_head_set_selects_top_heads_from_score():
     assert len(rset.head_ids) == 2
 
 
+def test_wu_retrieval_head_set_selects_top_heads_from_score():
+    # Pure-CPU selection over an already-computed detection score (the gate-11.1a
+    # input); no model needed, mirrors qr_head_set (M2).
+    from lcv.contracts import HeadScore, Method, RetrievalSource
+    from lcv.signals import retrieval_wu
+
+    hs = HeadScore(method=Method.WU_HEADS, scores=np.array([[0.1, 0.9], [0.5, 0.2]]))
+    rset = retrieval_wu.wu_retrieval_head_set(hs, k=2)
+    assert rset.source == RetrievalSource.WU
+    assert rset.head_ids[0] == (0, 1)  # highest score
+    assert rset.head_ids == ((0, 1), (1, 0))  # descending, stable tie order
+    assert rset.scores[(0, 1)] == 0.9
+
+
 # --- GPU gates ------------------------------------------------------------- #
 
 

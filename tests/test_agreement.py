@@ -105,6 +105,15 @@ def test_top_k_jaccard_nan_on_constant():
     assert np.isnan(ag.top_k_jaccard(np.zeros(5), np.zeros(5), 3))
 
 
+def test_ranking_breaks_ties_by_ascending_index():
+    # values 2.0 tie at indices 1 and 2; the stable descending rank keeps the lower
+    # index first, so top-2 is {0, 1} not {0, 2}. argsort(v)[::-1] would reverse the
+    # tie to highest-index-first and pick {0, 2} (M1 determinism).
+    v = [3.0, 2.0, 2.0, 1.0]
+    assert ag._ranking(v) == [0, 1, 2, 3]
+    assert ag.top_k_set(v, 2) == {0, 1}
+
+
 def test_rbo_identical_disjoint_and_validation():
     assert ag.rbo([0, 1, 2, 3], [0, 1, 2, 3]) == pytest.approx(1.0)
     assert ag.rbo([0, 1, 2, 3], [4, 5, 6, 7]) == pytest.approx(0.0)

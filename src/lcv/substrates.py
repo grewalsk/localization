@@ -146,6 +146,13 @@ def build_component_bundle(
     """Bundle component-substrate HeadScores (flattened head grids) (§6)."""
     if not scores:
         raise ValueError("no scores")
+    ids = {s.instance_id for s in scores}
+    if len(ids) != 1:
+        # Mixing per-instance and global (instance_id=None) head scores, or two
+        # different instances, would silently take scores[0]'s id for the bundle and
+        # mislabel the resulting D(x). Require one shared id (all None == a global
+        # head-set bundle), mirroring build_token_bundle (M4).
+        raise ValueError(f"head scores span multiple instances: {ids}")
     shapes = {s.scores.shape for s in scores}
     if len(shapes) != 1:
         raise ValueError(f"head-score grids differ in shape: {shapes}")
