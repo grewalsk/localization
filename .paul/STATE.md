@@ -4,7 +4,7 @@
 A training-free, per-instance signal — cross-method disagreement `D(x)` — that flags which inputs an aggressive KV-compression method will break, grounded in a causal oracle so the result is more than "the tools are noisy."
 
 ## Current Focus
-**CPU foundation COMPLETE — all 23 CPU/non-GPU tasks done, green, committed, pushed.** The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), masking-primary oracle (§8.1), NIAH data (§10), tokenization (§3.3/11.1e), the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10), the two probing/detection loaders (ITI/TruthfulQA §5.4, QRHead/LongMemEval §5.3), the faithful QRscore detector core (arXiv:2506.09944 Eq. 1-3, §5.3), the transcoder input-gradient + firing-position reductions (§4.4), and the §11.2a adjudication-subset fallback — all over shared backbone-portable cores (`*_from_patterns`, tensor-in) — plus the §11 phase-gate suite (phase0–4) is implemented and green (**217 CPU tests pass**, 5 download-gated skips, 12 GPU deselected). GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. A separate **CPU-only smoke path** (`smoke` extra: gpt2 + HF eager attention) runs the full pipeline spine end-to-end on a laptop. Plumbing only — gpt2 has no localization ground truth, so passing means "the wiring runs", not "the method is right". Remaining science work is GPU-bound and waits on the rented H100.
+**CPU foundation COMPLETE — all 23 CPU/non-GPU tasks done, green, committed, pushed.** The entire torch-free core — data contracts, agreement metrics (§7), substrates (§6), correctness (§9.2), leakage-safe flip model (§9.3), corruption (§8.2), masking-primary oracle (§8.1), NIAH data (§10), tokenization (§3.3/11.1e), the three natural-text loaders (HotpotQA/LongBench/TriviaQA, §10), the two probing/detection loaders (ITI/TruthfulQA §5.4, QRHead/LongMemEval §5.3), the faithful QRscore detector core (arXiv:2506.09944 Eq. 1-3, §5.3), the transcoder input-gradient + firing-position reductions (§4.4), and the §11.2a adjudication-subset fallback — all over shared backbone-portable cores (`*_from_patterns`, tensor-in) — plus the §11 phase-gate suite (phase0–4) is implemented and green (**265 CPU tests pass**, 5 download-gated skips, 13 GPU deselected). The **pre-experiment audit is fully closed**: all 22 findings (1 BLOCKER + 11 MAJORs + 10 MINORs) are fixed across 8 commits, each verified against source first, all pushed to origin/main. GPU instrumentation is stubbed behind typed contracts with every §11 acceptance threshold pinned; model-bound gates auto-skip without CUDA/weights. A separate **CPU-only smoke path** (`smoke` extra: gpt2 + HF eager attention) runs the full pipeline spine end-to-end on a laptop. Plumbing only — gpt2 has no localization ground truth, so passing means "the wiring runs", not "the method is right". Remaining science work is GPU-bound and waits on the rented H100.
 
 ## Milestone
 **M0 — Convergent-Validity Result** (v0.1.0) · status: in_progress
@@ -19,6 +19,26 @@ A training-free, per-instance signal — cross-method disagreement `D(x)` — th
 PLAN → BUILD → groom → human checkpoint (per §13) → next phase.
 
 ## Recently Completed
+- **Pre-experiment audit fully closed — 22 findings (1 BLOCKER + 11 MAJORs + 10
+  MINORs) across 8 commits, all pushed to origin/main, each verified against source
+  before changing:**
+  - `4311716` B1+M11 — content mask drops in-text template specials by id + clips to
+    the verbatim context char range (the §3.3 leakage trap).
+  - `d5e6d99` M5+M6 — exact non-rectangular head-pair selection + per-layer attention
+    streaming (4k-OOM avoidance); streamed == whole-tensor.
+  - `4856ac1` M8+M9+m5 — Ê pinned to attention-pattern AtP, seeded adjudication
+    subset, attribution-patching credited to Nanda 2022 / Kramár 2024 (not Syed).
+  - `194a8bd` M1–M4 — NaN-guard degenerate rankings, undefined permutation tests, and
+    flat D(x); Benjamini-Yekutieli fallback under dependence.
+  - `c1d9c64` M10+M7 — two-factor Llama-Scope transcoder fold (nsf_out/nsf_in ≈18.9×
+    decoder inflation at L8) + ≥4k-token TL/HF parity gate.
+  - `cc7f9fd` m1+m2+m4 — stable ascending-index tie-break, CPU Wu head-set selector,
+    component-bundle single-instance guard.
+  - `a569dfd` m3+m6+m8 — single normalization core, locate-all-text, n_effective_pairs
+    recorded on D(x).
+  - `2289da1` m7+m9+m10 — permutation-null doc reconciled to the paper's "shuffle one
+    ranking", ITI K=20-vs-48 note, pre-wired llama-2-7b-80k Wu fixture (33 heads
+    reproduced directly from Wu's released head_score at mean≥0.1).
 - **Paper-revision CPU tasks 17–23 (all committed + pushed to origin/main):**
   - `b51d760` — masking-primary oracle (`oracle/masking.py`, §8.1 Definition 2) +
     transcoder input-gradient/firing-position reductions (§4.4) + §11.2a
