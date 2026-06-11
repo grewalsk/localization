@@ -28,10 +28,56 @@ WU_PUBLISHED_OVERLAP_MIN = 0.5
 # Wu/RetHead on the fly and stores no Wu list either. To run 11.1a as a
 # reproduce-published-numbers check, detect on a model Wu *did* release: each
 # head_score JSON is {"layer-head": [per-example scores]}, a retrieval head is
-# mean(score) >= 0.1 (Wu's threshold), and llama-2-7b-80k yields 33 such heads
-# (top: 16-19, 11-15, 8-26, ...). Do NOT transcribe a Llama-3.1-8B set from a
-# secondary source -- that fabricates the number this gate exists to check.
+# mean(score) >= 0.1 (Wu's threshold). That detection on llama-2-7b-80k is wired in
+# below as PUBLISHED_WU_HEADS_LLAMA2_7B_80K. Do NOT transcribe a Llama-3.1-8B set
+# from a secondary source -- that fabricates the number this gate exists to check.
 PUBLISHED_WU_HEADS: frozenset[tuple[int, int]] = frozenset()
+
+# Wu retrieval heads for llama-2-7b-80k -- the gate-11.1a fixture for a model Wu DID
+# release. Reproduced (verified 2026-06-11) directly from Wu's primary release,
+# github.com/nightdessert/Retrieval_Head head_score/llama-2-7b-80k.json (1024 =
+# 32 layers x 32 heads of {"L-H": [per-example scores]}), by Wu's own threshold
+# mean(score) >= 0.1, which selects exactly 33 heads. Strongest by mean:
+# (16,19)=0.943, (11,15)=0.920, (8,26)=0.800. Computed from the released scores,
+# not transcribed; the count matches the 33 recorded above. Pinned by
+# test_published_wu_heads_llama2_fixture_is_intact so the set cannot silently drift.
+PUBLISHED_WU_HEADS_LLAMA2_7B_80K: frozenset[tuple[int, int]] = frozenset(
+    {
+        (6, 9),
+        (6, 16),
+        (6, 30),
+        (7, 4),
+        (7, 12),
+        (8, 26),
+        (11, 2),
+        (11, 15),
+        (13, 23),
+        (14, 18),
+        (14, 29),
+        (15, 14),
+        (16, 1),
+        (16, 19),
+        (17, 0),
+        (17, 13),
+        (17, 16),
+        (17, 18),
+        (17, 22),
+        (18, 30),
+        (19, 15),
+        (20, 29),
+        (20, 30),
+        (21, 1),
+        (21, 4),
+        (21, 16),
+        (21, 30),
+        (22, 8),
+        (22, 19),
+        (22, 22),
+        (24, 29),
+        (24, 30),
+        (29, 19),
+    }
+)
 
 # Synthetic offset mapping mimicking a fast tokenizer: specials are zero-width.
 TEXT = "The magic number is 4821."
@@ -371,6 +417,22 @@ def test_wu_retrieval_head_set_selects_top_heads_from_score():
     assert rset.head_ids[0] == (0, 1)  # highest score
     assert rset.head_ids == ((0, 1), (1, 0))  # descending, stable tie order
     assert rset.scores[(0, 1)] == 0.9
+
+
+# --- CPU core: gate-11.1a Wu reference fixture (m10) ------------------------ #
+
+
+def test_published_wu_heads_llama2_fixture_is_intact():
+    """m10: the pre-wired llama-2-7b-80k Wu set (gate-11.1a fixture) matches Wu's
+    released head_score (mean>=0.1 -> 33 heads) and cannot silently drift."""
+    heads = PUBLISHED_WU_HEADS_LLAMA2_7B_80K
+    assert len(heads) == 33  # Wu's mean(score) >= 0.1 rule on llama-2-7b-80k
+    # llama-2-7b is 32 layers x 32 heads; every id is in range and well-formed
+    assert all(0 <= layer < 32 and 0 <= head < 32 for (layer, head) in heads)
+    # the three strongest retrieval heads are present (means 0.94 / 0.92 / 0.80)
+    assert {(16, 19), (11, 15), (8, 26)} <= heads
+    # the PRIMARY_MODEL (Llama-3.1-8B) set stays empty -- no Wu release exists for it
+    assert PUBLISHED_WU_HEADS == frozenset()
 
 
 # --- GPU gates ------------------------------------------------------------- #

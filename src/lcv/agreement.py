@@ -327,8 +327,15 @@ def _mean_pairwise(vectors: Sequence[np.ndarray]) -> float:
 def permutation_test(
     vectors: Sequence[Vector], *, n_perm: int = 1000, seed: int = 0
 ) -> PermutationResult:
-    """Test whether mean pairwise agreement exceeds chance by shuffling token
-    positions within each vector independently (§7).
+    """Test whether mean pairwise agreement exceeds chance under a permutation null (§7).
+
+    The paper frames the null per pair as "shuffle one ranking"; this implementation
+    shuffles every vector's token positions independently. The two are statistically
+    equivalent: Spearman depends only on relative order, so for a pair the doubly
+    shuffled correlation ``spearman(a[pi], b[rho])`` equals ``spearman(a, b[rho.pi^-1])``
+    with ``rho.pi^-1`` again a uniform permutation -- fixing one ranking and shuffling
+    the other draws from the same null. Shuffling all sides extends this to the
+    >2-method mean without privileging a reference vector.
 
     p = (1 + #{null >= observed}) / (n_perm + 1). If the observed mean pairwise
     agreement is undefined (every pair constant -> NaN), the test is undefined: we
