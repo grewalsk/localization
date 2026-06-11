@@ -32,6 +32,23 @@ def test_disagreement_bounds():
         ag.disagreement([x])
 
 
+def test_n_effective_pairs_counts_defined_pairs():
+    a = np.array([0.1, 0.5, 0.9, 0.2])
+    b = np.array([0.2, 0.4, 0.8, 0.1])
+    const = np.ones(4)
+    assert ag.n_effective_pairs([a, b]) == 1
+    assert ag.n_effective_pairs([a, b, a.copy()]) == 3  # all 3 pairs defined
+    assert ag.n_effective_pairs([a, b, const]) == 1  # only (a, b); const drops out (M2)
+    # build_disagreement_score records the effective count on the score (M8)
+    ds = ag.build_disagreement_score(
+        "i0",
+        [Method.WU_ATTENTION, Method.QR_ATTENTION, Method.ACCUMULATED_ATTENTION],
+        [a, b, const],
+    )
+    assert ds.n_methods == 3
+    assert ds.n_effective_pairs == 1
+
+
 def test_build_disagreement_score_infers_substrate_and_guards():
     x = np.arange(5.0)
     ds = ag.build_disagreement_score(

@@ -313,6 +313,13 @@ class DisagreementScore:
     Leakage rule (§9.3, gate 11.3c): D(x) is the feature carried into the flip
     test and **must** be computed from the full-cache pass only. The type
     refuses to exist otherwise, so a leak cannot be introduced silently.
+
+    ``n_effective_pairs`` records how many of the ``C(n_methods, 2)`` method pairs
+    had a *defined* (non-NaN) Spearman and so actually entered the mean. A constant
+    importance vector drops its pairs (M2), so a D(x) can rest on far fewer pairs than
+    ``n_methods`` implies; carrying the count lets a consumer down-weight or flag those
+    instances instead of treating every D(x) as equally supported (M8). ``None`` means
+    "not recorded" (e.g. a hand-built score in a test).
     """
 
     instance_id: str
@@ -320,6 +327,7 @@ class DisagreementScore:
     value: float
     n_methods: int
     from_full_cache: bool = True
+    n_effective_pairs: int | None = None
 
     def __post_init__(self) -> None:
         if not self.from_full_cache:
@@ -329,6 +337,10 @@ class DisagreementScore:
             )
         if self.n_methods < 2:
             raise ValueError("D(x) needs >= 2 methods to form a pair")
+        if self.n_effective_pairs is not None:
+            total = self.n_methods * (self.n_methods - 1) // 2
+            if not 0 <= self.n_effective_pairs <= total:
+                raise ValueError(f"n_effective_pairs {self.n_effective_pairs} out of [0, {total}]")
 
 
 @dataclass(slots=True)

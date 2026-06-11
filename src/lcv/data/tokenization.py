@@ -183,6 +183,38 @@ def locate_text(haystack: str, needle: str) -> tuple[int, int] | None:
     return (start, end)
 
 
+def locate_all_text(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """All non-overlapping char spans of ``needle`` in ``haystack``, left to right.
+
+    :func:`locate_text` returns only the *first* occurrence, which silently
+    mislocalizes a gold/answer string that recurs -- the same phrase in the question
+    and the needle, or a repeated entity in the haystack -- so a caller picking that
+    one span can point at the wrong copy (M6). This returns every occurrence, letting
+    the caller keep the one inside the intended window. Same two-pass contract as
+    ``locate_text``: exact matches are taken wholesale, and only if there are none does
+    it fall back to the whitespace-normalized search, so one needle is never mixed
+    across the two passes. Offsets are into the original ``haystack``.
+    """
+    if not needle:
+        return []
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while (i := haystack.find(needle, start)) >= 0:
+        spans.append((i, i + len(needle)))
+        start = i + len(needle)  # non-overlapping
+    if spans:
+        return spans
+    norm_hay, idx_map = _normalize_ws_with_map(haystack)
+    norm_needle = " ".join(needle.split())
+    if not norm_needle:
+        return []
+    start = 0
+    while (j := norm_hay.find(norm_needle, start)) >= 0:
+        spans.append((idx_map[j], idx_map[j + len(norm_needle) - 1] + 1))
+        start = j + len(norm_needle)  # non-overlapping in normalized space
+    return spans
+
+
 # --------------------------------------------------------------------------- #
 # Real-tokenizer bridge (test marked needs_model)
 # --------------------------------------------------------------------------- #

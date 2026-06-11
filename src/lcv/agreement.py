@@ -94,6 +94,21 @@ def disagreement(vectors: Sequence[Vector]) -> float:
     return float(1.0 - np.nanmean(rs))
 
 
+def n_effective_pairs(vectors: Sequence[Vector]) -> int:
+    """Count of method pairs with a defined (non-NaN) Spearman -- those that enter D(x).
+
+    A constant vector makes every pair it is in NaN (M2), dropping it from D(x)'s mean;
+    this is the count that actually contributed, so a D(x) resting on few comparisons is
+    visible rather than masked by ``n_methods`` (M8).
+    """
+    m = len(vectors)
+    rs = np.array(
+        [spearman(vectors[i], vectors[j]) for i in range(m) for j in range(i + 1, m)],
+        dtype=float,
+    )
+    return int(np.count_nonzero(~np.isnan(rs)))
+
+
 def build_disagreement_score(
     instance_id: str,
     methods: Sequence[Method],
@@ -117,6 +132,7 @@ def build_disagreement_score(
         value=disagreement(vectors),
         n_methods=len(methods),
         from_full_cache=from_full_cache,
+        n_effective_pairs=n_effective_pairs(vectors),
     )
 
 

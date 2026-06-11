@@ -114,6 +114,27 @@ def test_locate_text_absent_returns_none():
     assert tok.locate_text("alpha beta", "zeta") is None
 
 
+def test_locate_all_text_multiple_non_overlapping():
+    hay = "cat and dog and cat"
+    assert tok.locate_all_text(hay, "cat") == [(0, 3), (16, 19)]
+    assert tok.locate_all_text(hay, "and") == [(4, 7), (12, 15)]
+    # non-overlapping: "aa" in "aaaa" is two spans, not three
+    assert tok.locate_all_text("aaaa", "aa") == [(0, 2), (2, 4)]
+
+
+def test_locate_all_text_absent_and_empty():
+    assert tok.locate_all_text("alpha beta", "zeta") == []
+    assert tok.locate_all_text("alpha", "") == []
+
+
+def test_locate_all_text_whitespace_tolerant_fallback():
+    # no exact match (double space); the normalized fallback finds both, mapped back
+    hay = "the  cat sat and the  cat ran"
+    spans = tok.locate_all_text(hay, "the cat")
+    assert len(spans) == 2
+    assert all(hay[s:e].split() == ["the", "cat"] for s, e in spans)
+
+
 def test_locate_then_map_then_verify_end_to_end():
     # the full 11.1e flow on a content-only string (no specials)
     text = "the cat sat on the mat"

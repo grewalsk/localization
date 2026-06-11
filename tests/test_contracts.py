@@ -101,6 +101,22 @@ def test_disagreement_score_enforces_leakage_rule():
         DisagreementScore("x", Substrate.TOKEN_ATTRIBUTION, value=0.0, n_methods=1)
 
 
+def test_disagreement_score_effective_pairs_bounds():
+    # 3 methods -> at most C(3,2)=3 defined pairs; None means "not recorded" (M8).
+    ds = DisagreementScore(
+        "x", Substrate.TOKEN_ATTRIBUTION, value=0.4, n_methods=3, n_effective_pairs=1
+    )
+    assert ds.n_effective_pairs == 1
+    assert (
+        DisagreementScore("x", Substrate.COMPONENT, value=0.0, n_methods=2).n_effective_pairs
+        is None
+    )
+    with pytest.raises(ValueError, match="out of"):
+        DisagreementScore(
+            "x", Substrate.TOKEN_ATTRIBUTION, value=0.4, n_methods=3, n_effective_pairs=4
+        )
+
+
 def test_flip_record_truth_table():
     assert FlipRecord("x", CompressionMethod.H2O, 128, True, False).flipped is True
     assert FlipRecord("x", CompressionMethod.H2O, 128, True, True).flipped is False

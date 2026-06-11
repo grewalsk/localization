@@ -31,39 +31,34 @@ from .contracts import (
     Substrate,
     assert_same_substrate,
 )
+from .signals.normalization import normalize_importance
 
 # --------------------------------------------------------------------------- #
 # Normalization
 # --------------------------------------------------------------------------- #
 
 
+# The normalization core lives in signals.normalization (shared with the
+# token-attribution signals so the attention reduction and the transcoder reduction
+# normalize identically); substrate bundling delegates here rather than keeping a
+# second minmax/zscore that could drift from it (M3). Constant -> all-zeros, empty
+# -> unchanged are defined once, there.
+
+
 def minmax(values: Sequence[float] | np.ndarray) -> np.ndarray:
-    x = np.asarray(values, dtype=float)
-    lo, hi = float(np.min(x)), float(np.max(x))
-    if hi - lo == 0.0:
-        return np.zeros_like(x)
-    return (x - lo) / (hi - lo)
+    return normalize_importance(np.asarray(values, dtype=float), "minmax")
 
 
 def zscore(values: Sequence[float] | np.ndarray) -> np.ndarray:
-    x = np.asarray(values, dtype=float)
-    sd = float(np.std(x))
-    if sd == 0.0:
-        return np.zeros_like(x)
-    return (x - float(np.mean(x))) / sd
+    return normalize_importance(np.asarray(values, dtype=float), "zscore")
 
 
 NORMALIZERS = {"minmax": minmax, "zscore": zscore}
 
 
 def normalize(values: Sequence[float] | np.ndarray, method: str = "minmax") -> np.ndarray:
-    try:
-        fn = NORMALIZERS[method]
-    except KeyError:
-        raise ValueError(
-            f"unknown normalization {method!r}; pick one of {list(NORMALIZERS)}"
-        ) from None
-    return fn(values)
+    """Apply the uniform per-run normalization (§5); delegates to the shared core."""
+    return normalize_importance(np.asarray(values, dtype=float), method)
 
 
 def members(substrate: Substrate, *, include_conditional: bool = True) -> tuple[Method, ...]:
